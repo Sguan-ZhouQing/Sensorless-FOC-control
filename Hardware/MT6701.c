@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:19:39
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 16:53:28
+ * @LastEditTime: 2025-09-12 20:51:06
  * @FilePath: \demo_STM32F103FocCode\Hardware\MT6701.c
  * @Description: FOC硬件层的编码器程序开发
  * 
@@ -30,8 +30,7 @@ static uint32_t mt6701_prev_timestamp_ms = 0;
 /**
  * @brief 初始化MT6701编码器
  */
-void MT6701_Init(void)
-{
+void MT6701_Init(void) {
     // 确保CS引脚为高电平（不选中）
     HAL_GPIO_WritePin(MT6701_CS_GPIO, MT6701_CS_PIN, GPIO_PIN_SET);
     
@@ -45,13 +44,11 @@ void MT6701_Init(void)
  * @param data: 要计算CRC的数据
  * @return CRC校验值
  */
-uint8_t MT6701_CalculateCRC(uint32_t data)
-{
+uint8_t MT6701_CalculateCRC(uint32_t data) {
     uint8_t crc = 0;
     uint32_t polynomial = 0x43; // (X^6 + X + 1)
     
-    for (int i = 17; i >= 0; i--)
-    {
+    for (int i = 17; i >= 0; i--) {
         uint8_t bit = (data >> i) & 1;
         crc <<= 1;
         if ((crc >> 6) ^ bit)
@@ -66,10 +63,8 @@ uint8_t MT6701_CalculateCRC(uint32_t data)
  * @param raw_angle: 输出的原始角度值(0-16383)
  * @return true: 读取成功, false: 读取失败
  */
-bool MT6701_ReadRawAngle(uint16_t *raw_angle)
-{
-    if (angle_valid)
-    {
+bool MT6701_ReadRawAngle(uint16_t *raw_angle) {
+    if (angle_valid) {
         *raw_angle = current_angle_raw;
         return true;
     }
@@ -81,15 +76,14 @@ bool MT6701_ReadRawAngle(uint16_t *raw_angle)
  * @param angle_rad: 输出的角度值（弧度）
  * @return true: 读取成功, false: 读取失败
  */
-bool MT6701_ReadAngle(float *angle_rad)
-{
-    if (angle_valid)
-    {
+bool MT6701_ReadAngle(float *angle_rad) {
+    if (angle_valid) {
         *angle_rad = (2.0f * PI * current_angle_raw) / MT6701_ANGLE_RES;
         return true;
     }
     return false;
 }
+
 
 /**
  * @brief SPI传输完成回调函数
@@ -138,19 +132,16 @@ void MT6701_SPI_CompleteCallback(SPI_HandleTypeDef *hspi) {
     }
 }
 
+
 /**
  * @brief SPI错误回调函数
  * @param hspi: SPI句柄
  */
-void MT6701_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
-{
-    if (hspi->Instance == SPI1)
-    {
-        printf("MT6701 SPI Error: %d\n", hspi->ErrorCode);
-        
+void MT6701_SPI_ErrorCallback(SPI_HandleTypeDef *hspi) {
+    if (hspi->Instance == SPI1) {
+        // printf("MT6701 SPI Error: %d\n", hspi->ErrorCode);
         // 确保CS引脚状态
         HAL_GPIO_WritePin(MT6701_CS_GPIO, MT6701_CS_PIN, GPIO_PIN_SET);
-        
         // 重新启动传输
         HAL_Delay(1);
         HAL_GPIO_WritePin(MT6701_CS_GPIO, MT6701_CS_PIN, GPIO_PIN_RESET);
@@ -158,14 +149,13 @@ void MT6701_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
     }
 }
 
+
 /**
  * @brief 检查是否有新数据可用
  * @return true: 有新数据, false: 无新数据
  */
-bool MT6701_IsDataReady(void)
-{
-    if (data_ready)
-    {
+bool MT6701_IsDataReady(void) {
+    if (data_ready) {
         data_ready = false;
         return true;
     }
@@ -178,16 +168,12 @@ bool MT6701_IsDataReady(void)
  * @param angle_rad: 输出的多圈角度值（弧度）
  * @return true: 读取成功, false: 读取失败
  */
-bool MT6701_ReadMultiTurnAngle(float *angle_rad)
-{
-    if (angle_valid)
-    {
+bool MT6701_ReadMultiTurnAngle(float *angle_rad) {
+    if (angle_valid) {
         // 计算当前单圈角度
         float current_angle_rad = (2.0f * PI * current_angle_raw) / MT6701_ANGLE_RES;
-        
         // 加上圈数对应的角度
         *angle_rad = current_angle_rad + (2.0f * PI * mt6701_total_turns);
-        
         return true;
     }
     return false;
@@ -198,8 +184,7 @@ bool MT6701_ReadMultiTurnAngle(float *angle_rad)
 /**
  * @brief 重置多圈计数器
  */
-void MT6701_ResetMultiTurnCounter(void)
-{
+void MT6701_ResetMultiTurnCounter(void) {
     mt6701_total_turns = 0;
     mt6701_first_reading = true;
     mt6701_prev_angle_rad = 0.0f;
@@ -211,8 +196,7 @@ void MT6701_ResetMultiTurnCounter(void)
  * @param angular_velocity_rads: 输出的角速度值
  * @return true: 计算成功, false: 计算失败
  */
-bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads)
-{
+bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads) {
     if (!angle_valid) return false;
 
     float current_angle_rad;
@@ -236,8 +220,7 @@ bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads)
 }
 
 
-void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads)
-{
+void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads) {
     float angular_velocity;
     MT6701_CalculateAngularVelocity(&angular_velocity);
     float filtered_data = kalman_filter_std(angular_velocity, MEASUREMENT_NOISE, PROCESS_NOISE);
@@ -251,10 +234,10 @@ void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads)
  * @param {SPI_HandleTypeDef} *hspi
  * @return {*}
  */
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-{
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
     MT6701_SPI_CompleteCallback(hspi);  // SPI传输完成回调函数
 }
+
 
 // // /**
 // //  * @description: 回调函数（SPI错误时重新启动DMA传输）
@@ -265,3 +248,4 @@ void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 // {
 //     MT6701_SPI_ErrorCallback(hspi); // SPI传输错误回调函数
 // }
+

@@ -5,6 +5,7 @@
 
 #define f103_BUFFER_SIZE 256
 
+void UART_Init(void);
 void UART_SendFloats(float *data, uint8_t count, uint8_t decimal_places);
 
 

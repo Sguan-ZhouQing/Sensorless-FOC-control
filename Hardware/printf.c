@@ -2,8 +2,8 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-05-26 15:32:26
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-07-17 22:36:15
- * @FilePath: \demo_STM32F407code\Hardware\printf.c
+ * @LastEditTime: 2025-09-12 19:03:27
+ * @FilePath: \demo_STM32F103FocCode\Hardware\printf.c
  * @Description: 使用USART串口收发和数据处理
  * @Key_GPIO: Many;
  * 
@@ -16,6 +16,37 @@
 
 extern UART_HandleTypeDef huart2;
 uint8_t f103_readBuffer[f103_BUFFER_SIZE];
+
+
+// 支持printf函数，而不需要选择MicroLIB
+#if 1
+#pragma import(__use_no_semihosting)
+//标准库需要的支持函数
+struct __FILE { 
+	int handle; 
+}; 
+// 支持printf函数，而不需要选择MicroLIB
+FILE __stdout;
+//定义_sys_exit避免使用半主机模式
+void _sys_exit(int x) { 
+	x = x; 
+} 
+#endif
+//串口重定向函数printf，不使用到MicroLIB
+int fputc(int ch,FILE *f) {
+	HAL_UART_Transmit(&huart2,(uint8_t *)&ch,1,0xFFFF);
+	return ch;
+}
+
+
+//串口主程序初始化
+void UART_Init(void)
+{
+    // 重新启动接收，使用Ex函数，接收不定长数据
+    HAL_UARTEx_ReceiveToIdle_DMA(&huart2, f103_readBuffer, sizeof(f103_readBuffer));
+    // 关闭DMA传输过半中断（HAL库默认开启，但我们只需要接收完成中断）
+    __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
+}
 
 
 /**
@@ -52,9 +83,7 @@ void UART_SendFloats(float *data, uint8_t count, uint8_t decimal_places) {
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
     if (huart->Instance == USART2) {
-        // 重新启动接收，使用Ex函数，接收不定长数据
         HAL_UARTEx_ReceiveToIdle_DMA(&huart2, f103_readBuffer, sizeof(f103_readBuffer));
-        // 关闭DMA传输过半中断（HAL库默认开启，但我们只需要接收完成中断）
         __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
     }
 }
