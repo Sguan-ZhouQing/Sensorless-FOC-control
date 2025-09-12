@@ -30,6 +30,7 @@
 #include "printf.h"
 #include "Foc.h"
 #include "Motor_control.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -95,19 +96,24 @@ int main(void)
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_ADC1_Init();
-  MX_ADC2_Init();
   MX_SPI1_Init();
   MX_TIM1_Init();
   MX_TIM2_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-
+  // HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_15);
+  FOC_Init();
+  // MT6701_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_15);
+    FOC_OpenVelocity_Loop(35.0f,0.6f);
+    float num = FOC_Calculate_Iq();
+    printf("%.5f\n",num);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
