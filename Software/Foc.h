@@ -15,7 +15,8 @@ extern FOC_HandleTypeDef SguanFOC;
 
 void FOC_Init(void);
 void FOC_OpenPosition_Loop(float angle_deg, float voltage);
-
+void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage);
+float FOC_Calculate_Iq(void);
 
 
 #endif // FOC_H
