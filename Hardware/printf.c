@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-05-26 15:32:26
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-13 00:03:31
+ * @LastEditTime: 2025-09-13 00:13:02
  * @FilePath: \demo_STM32F103FocCode\Hardware\printf.c
  * @Description: 使用USART串口收发和数据处理
  * @Key_GPIO: Many;
@@ -78,7 +78,7 @@ void UART_SendFloats(float *data, uint8_t count, uint8_t decimal_places) {
 
 
 // 数据解析函数
-float Get_Data(void) {
+static float Get_Data(void) {
     uint8_t data_Start_Num = 0;
     uint8_t data_End_Num = 0;
     uint8_t minus_Flag = 0;
@@ -123,7 +123,7 @@ float Get_Data(void) {
 
 
 // PID调整函数（需要根据你的实际PID结构体定义进行调整）
-void PID_Adjust(uint8_t Motor_n) {
+static void PID_Adjust(uint8_t Motor_n) {
     float data_Get = Get_Data();
     // 这里需要根据你的实际PID结构体进行修改
     // 示例代码：
