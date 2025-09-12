@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-05-26 15:32:26
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 19:03:27
+ * @LastEditTime: 2025-09-13 00:03:31
  * @FilePath: \demo_STM32F103FocCode\Hardware\printf.c
  * @Description: 使用USART串口收发和数据处理
  * @Key_GPIO: Many;
@@ -16,6 +16,9 @@
 
 extern UART_HandleTypeDef huart2;
 uint8_t f103_readBuffer[f103_BUFFER_SIZE];
+uint8_t RxBuffer[1];        // 串口接收缓冲
+uint16_t RxLine = 0;        // 指令长度
+uint8_t DataBuff[200];      // 指令内容
 
 
 // 支持printf函数，而不需要选择MicroLIB
@@ -74,15 +77,88 @@ void UART_SendFloats(float *data, uint8_t count, uint8_t decimal_places) {
 }
 
 
+// 数据解析函数
+float Get_Data(void) {
+    uint8_t data_Start_Num = 0;
+    uint8_t data_End_Num = 0;
+    uint8_t minus_Flag = 0;
+    float data_return = 0;
+    // 查找等号和问号的位置
+    for(uint8_t i = 0; i < 200; i++) {
+        if(DataBuff[i] == '=') data_Start_Num = i + 1;
+        if(DataBuff[i] == '?') {
+            data_End_Num = i - 1;
+            break;
+        }
+    }
+    
+    if(DataBuff[data_Start_Num] == '-') {
+        data_Start_Num += 1;
+        minus_Flag = 1;
+    }
+    // 简化数据处理逻辑
+    data_return = 0;
+    uint8_t decimal_point = 0;
+    for(uint8_t i = data_Start_Num; i <= data_End_Num; i++) {
+        if(DataBuff[i] == '.') {
+            decimal_point = i;
+            continue;
+        }
+        
+        if(decimal_point == 0) {
+            data_return = data_return * 10 + (DataBuff[i] - '0');
+        }
+        else {
+            float decimal_place = 0.1f;
+            for(uint8_t j = decimal_point + 1; j <= i; j++)
+            {
+                decimal_place *= 0.1f;
+            }
+            data_return += (DataBuff[i] - '0') * decimal_place;
+        }
+    }
+    if(minus_Flag == 1) data_return = -data_return;
+    return data_return;
+}
+
+
+// PID调整函数（需要根据你的实际PID结构体定义进行调整）
+void PID_Adjust(uint8_t Motor_n) {
+    float data_Get = Get_Data();
+    // 这里需要根据你的实际PID结构体进行修改
+    // 示例代码：
+    if(Motor_n == 1) {
+        if(DataBuff[0]=='P' && DataBuff[1]=='1')
+        {
+            // PID_Pos.P = data_Get;
+        }
+        // 其他PID参数调整逻辑...
+    }
+}
+
+
 /**
- * @description: 不定长数据接收完成回调函数
+ * @description: 处理接收到的数据（回调函数）
  * @param {UART_HandleTypeDef} *huart
  * @param {uint16_t} Size
  * @return {*}
  */
-void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
-{
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
     if (huart->Instance == USART2) {
+        // 处理接收到的数据
+        for(uint16_t i = 0; i < Size; i++) {
+            RxLine++;
+            if(RxLine <= sizeof(DataBuff)) {
+                DataBuff[RxLine-1] = f103_readBuffer[i];
+            }
+            if(f103_readBuffer[i] == 0x3F) { // 结束标志
+                PID_Adjust(1);
+                memset(DataBuff, 0, sizeof(DataBuff));
+                RxLine = 0;
+                break;
+            }
+        }
+        // 重新启动接收
         HAL_UARTEx_ReceiveToIdle_DMA(&huart2, f103_readBuffer, sizeof(f103_readBuffer));
         __HAL_DMA_DISABLE_IT(huart2.hdmarx, DMA_IT_HT);
     }
