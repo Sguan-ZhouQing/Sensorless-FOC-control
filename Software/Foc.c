@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-10 00:15:55
+ * @LastEditTime: 2025-09-12 17:08:40
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -12,6 +12,7 @@
 
 #define SguanFOC_ARR 2000   // 磁定向控制之中PWM份额值
 #define Pole_Pairs 7        //电机的极对极数（通常为7）
+#define Motor_Dir 1         //电机方向辨识（正负区分）
 #define Dead_Time 0.01f     //死区时间限幅（Low-High）
 FOC_HandleTypeDef SguanFOC;
 
@@ -27,6 +28,7 @@ void FOC_Init(void) {
     HAL_TIM_Base_Start_IT(&htim1);
     Timer_Init();
     // 2.磁编码器初始化
+    MT6701_Init();
     // 3.ADC相电流采样初始化
     // 4.串口初始化
     UART_Init();
