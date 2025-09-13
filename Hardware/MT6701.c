@@ -222,21 +222,22 @@ bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads) {
 
 void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads) {
     float angular_velocity;
+    MT6701_SPI_CompleteCallback(&hspi1);
     MT6701_CalculateAngularVelocity(&angular_velocity);
-    float filtered_data = kalman_filter_std(angular_velocity, MEASUREMENT_NOISE, PROCESS_NOISE);
+    float filtered_data = kalman_filter_dir(angular_velocity, MEASUREMENT_NOISE, PROCESS_NOISE);
     *filtered_velocity_rads = filtered_data;
 }
 
 
 
-/**
- * @description: 回调函数（使用DMA进行连续的数据传输）
- * @param {SPI_HandleTypeDef} *hspi
- * @return {*}
- */
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
-    MT6701_SPI_CompleteCallback(hspi);  // SPI传输完成回调函数
-}
+// /**
+//  * @description: 回调函数（使用DMA进行连续的数据传输）
+//  * @param {SPI_HandleTypeDef} *hspi
+//  * @return {*}
+//  */
+// void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
+//     MT6701_SPI_CompleteCallback(hspi);  // SPI传输完成回调函数
+// }
 
 
 // // /**

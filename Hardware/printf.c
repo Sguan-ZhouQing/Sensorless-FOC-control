@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-05-26 15:32:26
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-13 00:13:02
+ * @LastEditTime: 2025-09-13 14:26:21
  * @FilePath: \demo_STM32F103FocCode\Hardware\printf.c
  * @Description: 使用USART串口收发和数据处理
  * @Key_GPIO: Many;
@@ -14,11 +14,15 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+// 定义串口缓存区
 extern UART_HandleTypeDef huart2;
 uint8_t f103_readBuffer[f103_BUFFER_SIZE];
+// 串口接收缓冲数组
 uint8_t RxBuffer[1];        // 串口接收缓冲
 uint16_t RxLine = 0;        // 指令长度
 uint8_t DataBuff[200];      // 指令内容
+// 全局可调变量
+float Adjustable_Data;
 
 
 // 支持printf函数，而不需要选择MicroLIB
@@ -128,9 +132,10 @@ static void PID_Adjust(uint8_t Motor_n) {
     // 这里需要根据你的实际PID结构体进行修改
     // 示例代码：
     if(Motor_n == 1) {
-        if(DataBuff[0]=='P' && DataBuff[1]=='1')
+        if(DataBuff[0]=='A' && DataBuff[1]=='1')
         {
             // PID_Pos.P = data_Get;
+            Adjustable_Data = data_Get;
         }
         // 其他PID参数调整逻辑...
     }
