@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:27:38
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-09 17:05:48
+ * @LastEditTime: 2025-09-13 16:00:17
  * @FilePath: \demo_STM32F103FocCode\Underware\filter.c
  * @Description: FOC底层的滤波函数代码编写
  * 
@@ -23,7 +23,7 @@ float low_pass_filter(float input, float last_output, float alpha)
 }
 
 /**
- * @description: 一阶卡尔曼滤波
+ * @description: 一阶卡尔曼滤波（其一）
  * @param {float} input
  * @param {float} r
  * @param {float} q
@@ -39,6 +39,26 @@ float kalman_filter_std(float input, float r, float q)
     z = z + g * (input - z);
     p = (1 - g) * p;
     return z;
+}
+
+
+/**
+ * @description: 一阶卡尔曼滤波（其二）
+ * @param {float} input
+ * @param {float} r
+ * @param {float} q
+ * @return {*}
+ */
+float kalman_filter_dir(float input, float r, float q)
+{
+    static float z_dir;
+    static float pp = 1;
+    float g = 0;
+    pp = pp + q;
+    g = pp / (pp + r);
+    z_dir = z_dir + g * (input - z_dir);
+    pp = (1 - g) * pp;
+    return z_dir;
 }
 
 
@@ -81,3 +101,4 @@ float kalman_filter_std(float input, float r, float q)
 //         delay_ms(10); // 根据采样周期调整
 //     }
 // }
+
