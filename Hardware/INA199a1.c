@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:18:33
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 19:11:16
+ * @LastEditTime: 2025-09-13 16:25:12
  * @FilePath: \demo_STM32F103FocCode\Hardware\INA199a1.c
  * @Description: FOC硬件层的电流传感器代码开发
  * 
@@ -29,7 +29,9 @@ void INA199A1_Init(void) {
     // MX_DMA_Init();
     // MX_ADC1_Init();
     
-    // 启动ADC DMA传输
+    // 关闭DMA中断函数
+    HAL_NVIC_DisableIRQ(DMA1_Channel1_IRQn);
+    // 仅启用ADC的DMA传输
     INA199A1_Start();
 }
 
