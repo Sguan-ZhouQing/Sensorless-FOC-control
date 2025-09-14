@@ -41,13 +41,13 @@ typedef struct {
     float sine;      // sin(theta)
     float cosine;    // cos(theta)
     float k_svpwm;   // SVPWM调制系数（超调时使用）
-} FOC_HandleTypeDef;
+} SVPWM_HandleTypeDef;
 
 // 函数声明
-void ipark(FOC_HandleTypeDef* foc);    // 逆Park变换（计算三角函数）
-void ipark2(FOC_HandleTypeDef* foc);   // 逆Park变换（复用三角函数）
-void clarke(FOC_HandleTypeDef* foc);   // Clark变换
-void park(FOC_HandleTypeDef* foc);     // Park变换  
-void svpwm(FOC_HandleTypeDef* foc);    // SVPWM核心算法
+void ipark(SVPWM_HandleTypeDef* foc);    // 逆Park变换（计算三角函数）
+void ipark2(SVPWM_HandleTypeDef* foc);   // 逆Park变换（复用三角函数）
+void clarke(SVPWM_HandleTypeDef* foc);   // Clark变换
+void park(SVPWM_HandleTypeDef* foc);     // Park变换  
+void svpwm(SVPWM_HandleTypeDef* foc);    // SVPWM核心算法
 
 #endif  //SVPWM_H

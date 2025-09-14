@@ -16,7 +16,7 @@
  * @param {FOC_HandleTypeDef*} foc: FOC控制结构体
  * 作用：将旋转坐标系(dq)的电压转换回静止坐标系(αβ)
  */
-void ipark(FOC_HandleTypeDef* foc) {
+void ipark(SVPWM_HandleTypeDef* foc) {
     // 计算当前角度的正弦和余弦值
     foc->sine = fast_sin(foc->theta);
     foc->cosine = fast_cos(foc->theta);
@@ -32,7 +32,7 @@ void ipark(FOC_HandleTypeDef* foc) {
  * @param {FOC_HandleTypeDef*} foc: FOC控制结构体
  * 作用：与ipark()相同，但效率更高（避免重复计算三角函数）
  */
-void ipark2(FOC_HandleTypeDef* foc) {
+void ipark2(SVPWM_HandleTypeDef* foc) {
     // 直接使用预先计算好的三角函数值进行逆Park变换
     foc->u_alpha = foc->u_d * foc->cosine - foc->u_q * foc->sine;
     foc->u_beta = foc->u_q * foc->cosine + foc->u_d * foc->sine;
@@ -44,7 +44,7 @@ void ipark2(FOC_HandleTypeDef* foc) {
  * @param {FOC_HandleTypeDef*} foc: FOC控制结构体
  * 作用：简化三相系统为两相系统，便于后续处理
  */
-void clarke(FOC_HandleTypeDef* foc) {
+void clarke(SVPWM_HandleTypeDef* foc) {
     // Clark变换公式（假设三相电流和为0：ia + ib + ic = 0）
     foc->i_alpha = foc->i_a;  // α轴电流等于A相电流
     foc->i_beta = (foc->i_a + 2 * foc->i_b) * 0.5773502691896257f;  // β轴电流 = (ia + 2*ib)/√3
@@ -56,7 +56,7 @@ void clarke(FOC_HandleTypeDef* foc) {
  * @param {FOC_HandleTypeDef*} foc: FOC控制结构体
  * 作用：将电流转换到随转子旋转的坐标系，便于解耦控制
  */
-void park(FOC_HandleTypeDef* foc) {
+void park(SVPWM_HandleTypeDef* foc) {
     // 计算当前角度的正弦和余弦值
     foc->sine = fast_sin(foc->theta);
     foc->cosine = fast_cos(foc->theta);
@@ -72,7 +72,7 @@ void park(FOC_HandleTypeDef* foc) {
  * @param {FOC_HandleTypeDef*} foc: FOC控制结构体
  * 作用：生成驱动三相逆变器的PWM信号，实现精确的电压矢量控制
  */
-void svpwm(FOC_HandleTypeDef* foc) {
+void svpwm(SVPWM_HandleTypeDef* foc) {
     const float ts = 1;  // PWM周期（归一化为1）
     // 步骤1：计算三个参考电压，用于扇区判断
     float u1 = foc->u_beta;  // Uβ
