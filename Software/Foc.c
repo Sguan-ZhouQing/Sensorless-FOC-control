@@ -2,17 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 21:22:41
- * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
- * @Description: 
- * 
- * Copyright (c) 2025 by $JUST, All Rights Reserved. 
- */
-/*
- * @Author: 星必尘Sguan
- * @Date: 2025-08-29 14:25:14
- * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 20:19:12
+ * @LastEditTime: 2025-09-14 15:33:30
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -26,6 +16,7 @@
 #define Motor_Dir 1         //电机方向辨识（正负区分）
 #define Dead_Time 0.01f     //死区时间限幅（Low-High）
 // 磁定向控制的结构体变量
+SVPWM_HandleTypeDef SguanSVPWM;
 FOC_HandleTypeDef SguanFOC;
 // 开环速度控制相关变量
 static float electrical_angle = 0.0f;   // 电角度（弧度）
@@ -37,16 +28,16 @@ static uint32_t last_time = 0;          // 上次更新时间
 #define Shunt_Resistor 20               // 20毫伏的电流采样电阻
 static float current_Iq = 0.0f;         // Iq电流滤波后的数据
 // 卡尔曼滤波宏定义
-#define M_NOISE     10.0f                // R值，传感器噪声大则设大
-#define P_NOISE     0.01f              // Q值，系统变化快则设大
+#define M_NOISE     10.0f               // R值,传感器噪声大则设大
+#define P_NOISE     0.01f               // Q值,系统变化快则设大
 
 
 // 初始化FOC控制器的底层硬件
 void FOC_Init(void) {
     // 初始化FOC结构体
-    memset(&SguanFOC, 0, sizeof(FOC_HandleTypeDef));
-    SguanFOC.u_d = 0.0f;    // d轴电压设为0
-    SguanFOC.u_q = 0.3f;    // q轴电压（控制转矩，0.3是合理的启动值）
+    memset(&SguanSVPWM, 0, sizeof(SVPWM_HandleTypeDef));
+    SguanSVPWM.u_d = 0.0f;    // d轴电压设为0
+    SguanSVPWM.u_q = 0.3f;    // q轴电压（控制转矩，0.3是合理的启动值）
     current_Iq = 0.0f;     // 初始化电流Iq值
     
     // 1.硬件初始化
@@ -107,9 +98,9 @@ static void set_pwm_duty_cycle(float duty_a, float duty_b, float duty_c) {
 
 // 生成SVPWM波
 static void generate_svpwm_waveforms(void) {
-    ipark(&SguanFOC);      // 逆Park变换
-    svpwm(&SguanFOC);      // SVPWM计算
-    set_pwm_duty_cycle(SguanFOC.t_a, SguanFOC.t_b, SguanFOC.t_c); // 设置PWM
+    ipark(&SguanSVPWM);      // 逆Park变换
+    svpwm(&SguanSVPWM);      // SVPWM计算
+    set_pwm_duty_cycle(SguanSVPWM.t_a, SguanSVPWM.t_b, SguanSVPWM.t_c); // 设置PWM
 }
 
 
@@ -122,10 +113,10 @@ static void generate_svpwm_waveforms(void) {
 void FOC_OpenPosition_Loop(float angle_deg, float voltage) {
     // 1. 机械角度转电角度
     float mechanical_angle = (angle_deg / 360.0f) * 2.0f * PI;  // 机械角度转弧度
-    SguanFOC.theta = mechanical_angle * Pole_Pairs;             // 机械角度转电角度
+    SguanSVPWM.theta = mechanical_angle * Pole_Pairs;             // 机械角度转电角度
     // 2. 设置电压（控制转矩）
-    SguanFOC.u_q = voltage;
-    SguanFOC.u_d = 0.0f;
+    SguanSVPWM.u_q = voltage;
+    SguanSVPWM.u_d = 0.0f;
     // 3. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
@@ -155,10 +146,10 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
     }
     
     // 5. 设置电角度
-    SguanFOC.theta = electrical_angle;
+    SguanSVPWM.theta = electrical_angle;
     // 6. 设置电压（控制转矩）
-    SguanFOC.u_q = voltage;
-    SguanFOC.u_d = 0.0f;
+    SguanSVPWM.u_q = voltage;
+    SguanSVPWM.u_d = 0.0f;
     // 7. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
@@ -188,7 +179,7 @@ float FOC_Calculate_Iq(void) {
     float I_beta = (Iu + 2.0f * Iv) * (1.0f / Sqrt3);  // 1/√3
     // 3. Park变换 (静止 → 旋转)
     float sin_theta, cos_theta;
-    fast_sin_cos(SguanFOC.theta,&sin_theta,&cos_theta);
+    fast_sin_cos(SguanSVPWM.theta,&sin_theta,&cos_theta);
     
     // Park变换公式: 
     // Id = I_alpha * cos(theta) + I_beta * sin(theta)
