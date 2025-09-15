@@ -17,10 +17,34 @@ typedef struct {
         float Kp;    // 比例系数
         float Ki;    // 积分系数
         float Kd;    // 微分系数
-        float integral;      // 积分项累加值
-        float prev_error;    // 上一次误差（用于微分项）
-        float output_limit;  // 输出限制
-    } position_pid;
+        float Integral;      // 积分项累加值
+        float Prev_error;    // 上一次误差（用于微分项）
+        float Output_limit;  // 输出限制
+    } Position_PID;
+    struct {
+        float Kp;    // 比例系数
+        float Ki;    // 积分系数
+        float Kd;    // 微分系数
+        float Integral;      // 积分项累加值
+        float Prev_error;    // 上一次误差（用于微分项）
+        float Output_limit;  // 输出限制
+    } Velocity_PID;
+    struct {
+        float Kp;    // 比例系数
+        float Ki;    // 积分系数
+        float Kd;    // 微分系数
+        float Integral;      // 积分项累加值
+        float Prev_error;    // 上一次误差（用于微分项）
+        float Output_limit;  // 输出限制
+    } Current_PID;
+    struct {
+        float Kp;    // 比例系数
+        float Ki;    // 积分系数
+        float Kd;    // 微分系数
+        float Integral;      // 积分项累加值
+        float Prev_error;    // 上一次误差（用于微分项）
+        float Output_limit;  // 输出限制
+    } PosVelCur_PID;
 } FOC_HandleTypeDef;
 
 
@@ -39,6 +63,9 @@ void FOC_OpenCurrent_Loop(float current_desired);
 // 闭环运行(位置单环，速度单环，电流单环，三环串级PID)
 void FOC_SetPositionPID(float Kp, float Ki, float Kd, float output_limit);
 void FOC_CloseAbsolutePos_Loop(float target_angle_rad, float voltage);
+void FOC_SetVelocityPID(float Kp, float Ki, float Kd, float Output_limit);
+void FOC_CloseVelocity_Loop(float target_velocity_rads, float max_voltage);
+
 
 
 #endif // FOC_H
