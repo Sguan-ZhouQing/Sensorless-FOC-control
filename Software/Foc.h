@@ -13,8 +13,14 @@
 
 
 typedef struct {
-    /* 【输入】目标电压和角度（来自PID控制器） */
-    float u_d;       // d轴电压指令（励磁分量，通常控制为0）
+    struct {
+        float Kp;    // 比例系数
+        float Ki;    // 积分系数
+        float Kd;    // 微分系数
+        float integral;      // 积分项累加值
+        float prev_error;    // 上一次误差（用于微分项）
+        float output_limit;  // 输出限制
+    } position_pid;
 } FOC_HandleTypeDef;
 
 
@@ -30,7 +36,9 @@ float FOC_Calculate_Iq(void);
 void FOC_OpenPosition_Loop(float angle_deg, float voltage);
 void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage);
 void FOC_OpenCurrent_Loop(float current_desired);
-
+// 闭环运行(位置单环，速度单环，电流单环，三环串级PID)
+void FOC_SetPositionPID(float Kp, float Ki, float Kd, float output_limit);
+void FOC_CloseAbsolutePos_Loop(float target_angle_rad, float voltage);
 
 
 #endif // FOC_H
