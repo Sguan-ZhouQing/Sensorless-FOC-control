@@ -11,6 +11,7 @@
 #include "MT6701.h"
 #include "printf.h"
 
+
 typedef struct {
     /* 【输入】目标电压和角度（来自PID控制器） */
     float u_d;       // d轴电压指令（励磁分量，通常控制为0）
@@ -23,11 +24,12 @@ extern FOC_HandleTypeDef SguanFOC;
 
 // 磁定向控制FOC函数声明汇总
 void FOC_Init(void);
+void FOC_EncoderAlignment(void);
 float FOC_Calculate_Iq(void);
 // 开环运行（位置环，速度环，电流环）
 void FOC_OpenPosition_Loop(float angle_deg, float voltage);
 void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage);
-void FOC_OpenCurrent_Loop(float current_desired, float velocity_rad_s);
+void FOC_OpenCurrent_Loop(float current_desired);
 
 
 

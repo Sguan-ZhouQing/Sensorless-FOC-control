@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-15 11:46:04
+ * @LastEditTime: 2025-09-15 18:44:46
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -12,9 +12,10 @@
 
 //电机参数设定（宏定义）
 #define SguanFOC_ARR 2000   // 磁定向控制之中PWM份额值
-#define Pole_Pairs 7        //电机的极对极数（通常为7）
-#define Motor_Dir 1         //电机方向辨识（正负区分）
-#define Dead_Time 0.01f     //死区时间限幅（Low-High）
+#define Pole_Pairs 7        // 电机的极对极数（通常为7）
+#define Motor_Dir 1         // 电机方向辨识（正负区分）
+#define Dead_Time 0.01f     // 死区时间限幅（Low-High）
+#define Motor_Vbus 12.0f    // 设置电机驱动电源的大小
 // 磁定向控制的结构体变量
 SVPWM_HandleTypeDef SguanSVPWM;
 FOC_HandleTypeDef SguanFOC;
@@ -31,9 +32,12 @@ static float current_Iq = 0.0f;         // Iq电流滤波后的数据
 #define M_NOISE     10.0f               // R值,传感器噪声大则设大
 #define P_NOISE     0.01f               // Q值,系统变化快则设大
 // 电流开环所需的电机参数
-static float Motor_R = 1.0f;        // 电机相电阻（Ω）
-static float Motor_L = 0.001f;      // 电机相电感（H）
-static float Motor_Ke = 0.01f;      // 反电动势常数（V/(rad/s)）
+// static float MOTOR_L = 0.0053f;      // 电机相电感（H）
+#define MOTOR_RESISTANCE 11.1f          // 电机相电阻（Ω）
+#define MOTOR_KV 120.0f                 // 电机KV值（RPM/V）
+#define MOTOR_KE (60.0f / (2.0f * PI * MOTOR_KV))  // 反电动势常数（V/(rad/s)）
+// 电机初始"电角度"和"机械角度"对齐变量
+static float alignment_angle_offset = 0.0f;
 
 
 
@@ -59,6 +63,7 @@ void FOC_Init(void) {
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+    FOC_EncoderAlignment();
 }
 
 
@@ -109,6 +114,40 @@ static void generate_svpwm_waveforms(void) {
 }
 
 
+// 角度归一化，将角度限制在0-2π范围内
+static float normalize_angle(float angle) {
+    // 一次性处理所有情况
+    angle = fmodf(angle, 2.0f * PI);
+    return angle < 0 ? angle + 2.0f * PI : angle;
+}
+
+
+/**
+ * @brief 编码器零位自动校准
+ * @description: 通过注入d轴电流将转子拉到d轴位置，记录此时的编码器位置作为偏移量
+ */
+void FOC_EncoderAlignment(void) {
+    // 1. 注入d轴电流将转子拉到d轴位置
+    SguanSVPWM.u_d = 0.0f;  // 设置d轴电压
+    SguanSVPWM.u_q = 0.3f;  // 注入q轴电压
+    SguanSVPWM.theta = 0.0f; // 假设电角度为0时q轴对齐
+    // 生成SVPWM，将转子拉到d轴位置
+    generate_svpwm_waveforms();
+    HAL_Delay(1000);  // 等待1000ms让转子稳定
+    
+    // 2. 读取此时的编码器机械角度
+    float mechanical_angle_rad;
+    if (MT6701_ReadAngle(&mechanical_angle_rad)) {
+        // 计算偏移量：电角度 = (机械角度 + 偏移量) * 极对数
+        alignment_angle_offset = -mechanical_angle_rad;
+    }
+    // 3. 停止注入电流
+    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f;
+    generate_svpwm_waveforms();
+}
+
+
 /**
  * @description: 计算q轴电流Iq值
  * @note: 带一阶卡尔曼滤波（计算后输出平稳曲线）
@@ -152,8 +191,8 @@ float FOC_Calculate_Iq(void) {
  */
 void FOC_OpenPosition_Loop(float angle_deg, float voltage) {
     // 1. 机械角度转电角度
-    float mechanical_angle = (angle_deg / 360.0f) * 2.0f * PI;  // 机械角度转弧度
-    SguanSVPWM.theta = mechanical_angle * Pole_Pairs;             // 机械角度转电角度
+    float mechanical_angle = (angle_deg / 360.0f) * 2.0f * PI;
+    SguanSVPWM.theta = normalize_angle(mechanical_angle * Pole_Pairs);
     // 2. 设置电压（控制转矩）
     SguanSVPWM.u_q = voltage;
     SguanSVPWM.u_d = 0.0f;
@@ -179,11 +218,7 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
     float angle_increment = electrical_velocity * (delta_time_ms / 1000.0f);
     // 4. 更新电角度（保持角度在0-2π范围内）
     electrical_angle += angle_increment;
-    if (electrical_angle > 2.0f * PI) {
-        electrical_angle -= 2.0f * PI;
-    } else if (electrical_angle < 0) {
-        electrical_angle += 2.0f * PI;
-    }
+    electrical_angle = normalize_angle(electrical_angle);
     
     // 5. 设置电角度
     SguanSVPWM.theta = electrical_angle;
@@ -196,22 +231,40 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
 
 
 /**
- * @description: [Mode3]FOC开环电流控制（恒定电流）
- * @param {float} current_desired 期望的q轴电流（单位：A）
- * @param {float} velocity_rad_s 机械角速度（弧度/秒），用于反电动势补偿（可选）
+ * @description: [Mode3]FOC开环电流控制（使用编码器速度进行前馈补偿）
+ * @param {float} target_current_iq 期望的q轴电流（单位：A），正负代表扭矩方向
+ * @note 这是一个开环函数。它输出一个电压以期产生目标电流，但实际电流会有误差。
+ *        电机最终达到的速度由目标电流和负载共同决定。
  */
-void FOC_OpenCurrent_Loop(float current_desired, float velocity_rad_s) {
-    // 1. 估算所需的q轴电压（基于电机模型或经验比例）
-    // 计算电角速度（rad/s）
-    float electrical_velocity = velocity_rad_s * Pole_Pairs;
-    // 估算q轴电压（忽略d轴耦合和电感变化）
-    float u_q_estimate = current_desired * Motor_R + Motor_Ke * electrical_velocity;
-    // 限制电压在安全范围内（0~1.0）
-    u_q_estimate = constrain(u_q_estimate, 0.0f, 1.0f);
-    // 2. 更新SVPWM指令
-    SguanSVPWM.u_q = u_q_estimate;
-    SguanSVPWM.u_d = 0.0f;   // d轴通常设为0（忽略磁链控制）
-    // 3. 生成SVPWM波形（需要提前设置好电角度theta）
+void FOC_OpenCurrent_Loop(float target_current_iq) {
+    // 1. 获取当前机械角度
+    float mechanical_angle_rad;
+    if (!MT6701_ReadAngle(&mechanical_angle_rad)) {
+        return;
+    }
+
+    // 2. 计算电角度（考虑对齐偏移）
+    float raw_electrical_angle = (mechanical_angle_rad + alignment_angle_offset) * Pole_Pairs;
+    SguanSVPWM.theta = normalize_angle(raw_electrical_angle);
+    
+    // 3. 获取角速度（用于前馈补偿）
+    float mechanical_velocity_rads;
+    MT6701_FilteredAngularVelocity(&mechanical_velocity_rads);
+    float electrical_velocity_rads = mechanical_velocity_rads * Pole_Pairs;
+    
+    // 4. 使用电机模型计算所需的q轴电压
+    float u_q_feedforward = (target_current_iq * MOTOR_RESISTANCE) + (MOTOR_KE * electrical_velocity_rads);
+    
+    // 5. 限制输出电压（使用标幺值）
+    float u_q_max = 0.95f;
+    u_q_feedforward = constrain(u_q_feedforward / Motor_Vbus, 0.0f, u_q_max);
+    
+    // 6. 更新SVPWM指令
+    SguanSVPWM.u_q = u_q_feedforward;
+    SguanSVPWM.u_d = 0.0f;
+    
+    // 7. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
+
 
