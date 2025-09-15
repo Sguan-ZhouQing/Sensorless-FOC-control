@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-14 15:33:30
+ * @LastEditTime: 2025-09-15 11:46:04
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -30,6 +30,11 @@ static float current_Iq = 0.0f;         // Iq电流滤波后的数据
 // 卡尔曼滤波宏定义
 #define M_NOISE     10.0f               // R值,传感器噪声大则设大
 #define P_NOISE     0.01f               // Q值,系统变化快则设大
+// 电流开环所需的电机参数
+static float Motor_R = 1.0f;        // 电机相电阻（Ω）
+static float Motor_L = 0.001f;      // 电机相电感（H）
+static float Motor_Ke = 0.01f;      // 反电动势常数（V/(rad/s)）
+
 
 
 // 初始化FOC控制器的底层硬件
@@ -40,7 +45,7 @@ void FOC_Init(void) {
     SguanSVPWM.u_q = 0.3f;    // q轴电压（控制转矩，0.3是合理的启动值）
     current_Iq = 0.0f;     // 初始化电流Iq值
     
-    // 1.硬件初始化
+    // 1.定时器初始化
     HAL_TIM_Base_Start_IT(&htim1);
     Timer_Init();
     // 2.磁编码器初始化
@@ -105,6 +110,41 @@ static void generate_svpwm_waveforms(void) {
 
 
 /**
+ * @description: 计算q轴电流Iq值
+ * @note: 带一阶卡尔曼滤波（计算后输出平稳曲线）
+ * @return {float} Iq电流值
+ */
+float FOC_Calculate_Iq(void) {
+    // 1. 采样三相电流
+    int32_t Iu_Raw,Iv_Raw;
+    Iu_Raw = INA199A1_GetRawValue(0) - Intermediate_Raw;  // U相电流（电压值）
+    Iv_Raw = INA199A1_GetRawValue(1) - Intermediate_Raw;  // V相电流（电压值）
+    // 将原始ADC值转换为实际电流值（单位：A）
+    // 计算公式：电流(A) = (ADC原始值 * 3.3V / 4096) / (增益 * 采样电阻)
+    // 简化后：电流(A) = ADC原始值 * (3.3 / (4096 * 50 * 0.02))
+    // 计算系数：3.3 / (4096 * 50 * 0.02) = 3.3 / 4096 ≈ 0.00080566
+    const float ADC_to_Current = 3.3f / 4096.0f / INA199A1_Num / (Shunt_Resistor / 1000.0f);
+    float Iu = ADC_to_Current * (float)Iu_Raw;
+    float Iv = ADC_to_Current * (float)Iv_Raw;
+    // Iw = -Iu - Iv;                // W相电流（根据KCL定律）
+    
+    // 2. Clarke变换 (3相 → 2相)
+    float I_alpha = Iu;
+    float I_beta = (Iu + 2.0f * Iv) * (1.0f / Sqrt3);  // 1/√3
+    // 3. Park变换 (静止 → 旋转)
+    float sin_theta, cos_theta;
+    fast_sin_cos(SguanSVPWM.theta,&sin_theta,&cos_theta);
+    
+    // Park变换公式: 
+    // Id = I_alpha * cos(theta) + I_beta * sin(theta)
+    // Iq = -I_alpha * sin(theta) + I_beta * cos(theta)
+    float Raw_Iq = -I_alpha * sin_theta + I_beta * cos_theta;
+    current_Iq = kalman_filter_std(Raw_Iq, M_NOISE, P_NOISE);
+    return current_Iq;
+}
+
+
+/**
  * @description: [Mode1]FOC开环位置控制
  * @param {float} angle_deg 机械角度度数(0到359度)
  * @param {int} pole_pairs 电机极对数
@@ -156,36 +196,22 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
 
 
 /**
- * @description: 计算q轴电流Iq值
- * @note: 带低通滤波（计算后输出平稳曲线）
- * @return {float} Iq电流值
+ * @description: [Mode3]FOC开环电流控制（恒定电流）
+ * @param {float} current_desired 期望的q轴电流（单位：A）
+ * @param {float} velocity_rad_s 机械角速度（弧度/秒），用于反电动势补偿（可选）
  */
-float FOC_Calculate_Iq(void) {
-    // 1. 采样三相电流
-    int32_t Iu_Raw,Iv_Raw;
-    Iu_Raw = INA199A1_GetRawValue(0) - Intermediate_Raw;  // U相电流（电压值）
-    Iv_Raw = INA199A1_GetRawValue(1) - Intermediate_Raw;  // V相电流（电压值）
-    // 将原始ADC值转换为实际电流值（单位：A）
-    // 计算公式：电流(A) = (ADC原始值 * 3.3V / 4096) / (增益 * 采样电阻)
-    // 简化后：电流(A) = ADC原始值 * (3.3 / (4096 * 50 * 0.02))
-    // 计算系数：3.3 / (4096 * 50 * 0.02) = 3.3 / 4096 ≈ 0.00080566
-    const float ADC_to_Current = 3.3f / 4096.0f / INA199A1_Num / (Shunt_Resistor / 1000.0f);
-    float Iu = ADC_to_Current * (float)Iu_Raw;
-    float Iv = ADC_to_Current * (float)Iv_Raw;
-    // Iw = -Iu - Iv;                // W相电流（根据KCL定律）
-    
-    // 2. Clarke变换 (3相 → 2相)
-    float I_alpha = Iu;
-    float I_beta = (Iu + 2.0f * Iv) * (1.0f / Sqrt3);  // 1/√3
-    // 3. Park变换 (静止 → 旋转)
-    float sin_theta, cos_theta;
-    fast_sin_cos(SguanSVPWM.theta,&sin_theta,&cos_theta);
-    
-    // Park变换公式: 
-    // Id = I_alpha * cos(theta) + I_beta * sin(theta)
-    // Iq = -I_alpha * sin(theta) + I_beta * cos(theta)
-    float Raw_Iq = -I_alpha * sin_theta + I_beta * cos_theta;
-    current_Iq = kalman_filter_std(Raw_Iq, M_NOISE, P_NOISE);
-    return current_Iq;
+void FOC_OpenCurrent_Loop(float current_desired, float velocity_rad_s) {
+    // 1. 估算所需的q轴电压（基于电机模型或经验比例）
+    // 计算电角速度（rad/s）
+    float electrical_velocity = velocity_rad_s * Pole_Pairs;
+    // 估算q轴电压（忽略d轴耦合和电感变化）
+    float u_q_estimate = current_desired * Motor_R + Motor_Ke * electrical_velocity;
+    // 限制电压在安全范围内（0~1.0）
+    u_q_estimate = constrain(u_q_estimate, 0.0f, 1.0f);
+    // 2. 更新SVPWM指令
+    SguanSVPWM.u_q = u_q_estimate;
+    SguanSVPWM.u_d = 0.0f;   // d轴通常设为0（忽略磁链控制）
+    // 3. 生成SVPWM波形（需要提前设置好电角度theta）
+    generate_svpwm_waveforms();
 }
 
