@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-15 20:42:28
+ * @LastEditTime: 2025-09-16 18:39:56
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -295,62 +295,59 @@ void FOC_SetPositionPID(float Kp, float Ki, float Kd, float Output_limit) {
  * @param {float} target_angle_rad 目标绝对角度（弧度），可以超过2π
  * @param {float} voltage 基准电压幅值(0-1)，PID输出会在此基础上调整
  */
-void FOC_CloseAbsolutePos_Loop(float target_angle_rad, float voltage) {
-    static float current_electrical_angle = 0.0f;
+void FOC_CloseAbsolutePos_Loop(float target_angle_rad, float max_voltage) {
     static uint32_t prev_time_ms = 0;
-    // 1. 获取当前时间并计算时间差
     uint32_t current_time_ms = HAL_GetTick();
-    float dt_ms = (float)(current_time_ms - prev_time_ms);
-    prev_time_ms = current_time_ms;
-    // 避免除零错误
-    if (dt_ms == 0) dt_ms = 1.0f;
-    float dt = dt_ms / 1000.0f; // 转换为秒
     
-    // 2. 读取当前编码器角度（多圈）
-    float current_angle_rad;
-    if (!MT6701_ReadMultiTurnAngle(&current_angle_rad)) {
-        // 如果读取失败，使用上一次的角度
+    if (prev_time_ms == 0) {
+        prev_time_ms = current_time_ms;
         return;
     }
     
-    // 3. 计算角度误差（考虑多圈）
-    float error = target_angle_rad - current_angle_rad;
-    // 4. 处理角度误差的周期性（归一化到[-π, π]范围）
-    if (error > PI) {
-        error -= 2.0f * PI;
-    } else if (error < -PI) {
-        error += 2.0f * PI;
-    }
-    
-    // 5. 计算PID三项
-    // 比例项
+    float dt_ms = (float)(current_time_ms - prev_time_ms);
+    prev_time_ms = current_time_ms;
+    if (dt_ms > 100) dt_ms = 10; // 限幅
+    float dt = dt_ms / 1000.0f;
+
+    // 读取当前多圈机械角度
+    float current_mechanical_angle;
+    if (!MT6701_ReadMultiTurnAngle(&current_mechanical_angle)) return;
+
+    // 转换为电角度
+    float current_electrical_angle = (current_mechanical_angle + alignment_angle_offset) * Pole_Pairs;
+    current_electrical_angle = normalize_angle(current_electrical_angle);
+
+    // 目标电角度
+    float target_electrical_angle = target_angle_rad * Pole_Pairs;
+    target_electrical_angle = normalize_angle(target_electrical_angle);
+
+    // 计算误差并归一化
+    float error = target_electrical_angle - current_electrical_angle;
+    if (error > PI) error -= 2 * PI;
+    else if (error < -PI) error += 2 * PI;
+
+    // PID计算
     float P = SguanFOC.Position_PID.Kp * error;
-    // 积分项（抗积分饱和）
     SguanFOC.Position_PID.Integral += error * dt;
-    // 限制积分项防止windup
     SguanFOC.Position_PID.Integral = constrain(SguanFOC.Position_PID.Integral, 
                                               -SguanFOC.Position_PID.Output_limit / SguanFOC.Position_PID.Ki, 
                                               SguanFOC.Position_PID.Output_limit / SguanFOC.Position_PID.Ki);
     float I = SguanFOC.Position_PID.Ki * SguanFOC.Position_PID.Integral;
-    // 微分项
     float derivative = (error - SguanFOC.Position_PID.Prev_error) / dt;
     float D = SguanFOC.Position_PID.Kd * derivative;
     SguanFOC.Position_PID.Prev_error = error;
 
-    // 6. 计算PID总输出
     float pid_output = P + I + D;
-    // 7. 限制输出幅度
     pid_output = constrain(pid_output, -SguanFOC.Position_PID.Output_limit, SguanFOC.Position_PID.Output_limit);
-    // 8. 更新电角度（PID输出作为角度增量）
-    current_electrical_angle += pid_output;
-    // 9. 保持电角度在0-2π范围内
-    current_electrical_angle = normalize_angle(current_electrical_angle);
-    
-    // 10. 设置电角度和电压
-    SguanSVPWM.theta = current_electrical_angle;
-    SguanSVPWM.u_q = voltage;  // 基准电压 + PID调整
+
+    // 转换为电压指令
+    float u_q = pid_output * max_voltage;
+    u_q = constrain(u_q, -max_voltage, max_voltage);
+
+    // 更新SVPWM
+    SguanSVPWM.u_q = u_q;
     SguanSVPWM.u_d = 0.0f;
-    // 11. 生成SVPWM波形
+    SguanSVPWM.theta = current_electrical_angle; // 使用反馈角度
     generate_svpwm_waveforms();
 }
 
@@ -380,60 +377,67 @@ void FOC_SetVelocityPID(float Kp, float Ki, float Kd, float Output_limit) {
  */
 void FOC_CloseVelocity_Loop(float target_velocity_rads, float max_voltage) {
     static uint32_t prev_time_ms = 0;
-    // 1. 获取当前时间并计算时间差
+    static float prev_electrical_angle = 0.0f; // 保存上一次电角度
+
     uint32_t current_time_ms = HAL_GetTick();
     float dt_ms = (float)(current_time_ms - prev_time_ms);
     prev_time_ms = current_time_ms;
-    // 避免除零错误
     if (dt_ms == 0) dt_ms = 1.0f;
-    float dt = dt_ms / 1000.0f; // 转换为秒
-    
-    // 2. 读取当前实际速度（使用编码器）
+    float dt = dt_ms / 1000.0f;
+
+    // 读取当前实际速度
     float actual_velocity_rads;
-    if (!MT6701_CalculateAngularVelocity(&actual_velocity_rads)) {
-        // 如果速度读取失败，使用开环控制作为后备
-        SguanSVPWM.u_q = max_voltage * 0.3f; // 使用30%的最大电压
+    MT6701_FilteredAngularVelocity(&actual_velocity_rads);
+
+    if (actual_velocity_rads == 0.0f) {
+        // 后备：使用开环控制，但保留上一次电角度
+        SguanSVPWM.u_q = max_voltage * 0.3f;
         SguanSVPWM.u_d = 0.0f;
+        SguanSVPWM.theta = prev_electrical_angle; // 使用上一次角度
         generate_svpwm_waveforms();
         return;
     }
-    
-    // 3. 计算速度误差
+
     float error = target_velocity_rads - actual_velocity_rads;
-    
-    // 4. 计算PID三项
-    // 比例项
+
+    // PID计算
     float P = SguanFOC.Velocity_PID.Kp * error;
-    // 积分项（抗积分饱和）
+
+    // 积分项（抗饱和 + 防除零）
     SguanFOC.Velocity_PID.Integral += error * dt;
-    // 限制积分项防止windup
-    float max_integral = SguanFOC.Velocity_PID.Output_limit / SguanFOC.Velocity_PID.Ki;
-    SguanFOC.Velocity_PID.Integral = constrain(SguanFOC.Velocity_PID.Integral, -max_integral, max_integral);
+    if (SguanFOC.Velocity_PID.Ki > 1e-6f) {
+        float max_integral = SguanFOC.Velocity_PID.Output_limit / SguanFOC.Velocity_PID.Ki;
+        SguanFOC.Velocity_PID.Integral = constrain(SguanFOC.Velocity_PID.Integral, -max_integral, max_integral);
+    }
     float I = SguanFOC.Velocity_PID.Ki * SguanFOC.Velocity_PID.Integral;
+
     // 微分项
     float derivative = (error - SguanFOC.Velocity_PID.Prev_error) / dt;
     float D = SguanFOC.Velocity_PID.Kd * derivative;
     SguanFOC.Velocity_PID.Prev_error = error;
-    
-    // 5. 计算PID总输出（作为q轴电压指令）
-    float pid_output = P + I + D;
-    // 6. 限制输出幅度
+
+    // 前馈项（可选）
+    float feedforward = target_velocity_rads * 0.1f; // 示例：速度前馈增益
+
+    float pid_output = P + I + D + feedforward;
     pid_output = constrain(pid_output, -SguanFOC.Velocity_PID.Output_limit, SguanFOC.Velocity_PID.Output_limit);
-    // 7. 转换为电压指令（考虑最大电压限制）
+
+    // 转换为电压指令
     float u_q = pid_output;
     u_q = constrain(u_q, -max_voltage, max_voltage);
-    
-    // 8. 获取当前电角度
+
+    // 获取当前电角度
     float mechanical_angle_rad;
     if (MT6701_ReadAngle(&mechanical_angle_rad)) {
         float electrical_angle = (mechanical_angle_rad + alignment_angle_offset) * Pole_Pairs;
         SguanSVPWM.theta = normalize_angle(electrical_angle);
+        prev_electrical_angle = SguanSVPWM.theta; // 保存当前角度
+    } else {
+        SguanSVPWM.theta = prev_electrical_angle; // 使用上一次角度
     }
-    
-    // 9. 设置电压指令
+
     SguanSVPWM.u_q = u_q;
     SguanSVPWM.u_d = 0.0f;
-    // 10. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
 
