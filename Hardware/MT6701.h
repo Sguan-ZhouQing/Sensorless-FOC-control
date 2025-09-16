@@ -27,7 +27,6 @@ void MT6701_SPI_ErrorCallback(SPI_HandleTypeDef *hspi);
 bool MT6701_ReadMultiTurnAngle(float *angle_rad);
 void MT6701_ResetMultiTurnCounter(void);
 // 角速度检测
-bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads);
 void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads);
 
 // 外部变量声明

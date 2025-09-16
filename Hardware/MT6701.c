@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:19:39
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-12 20:51:06
+ * @LastEditTime: 2025-09-16 19:10:33
  * @FilePath: \demo_STM32F103FocCode\Hardware\MT6701.c
  * @Description: FOC硬件层的编码器程序开发
  * 
@@ -196,7 +196,7 @@ void MT6701_ResetMultiTurnCounter(void) {
  * @param angular_velocity_rads: 输出的角速度值
  * @return true: 计算成功, false: 计算失败
  */
-bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads) {
+static bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads) {
     if (!angle_valid) return false;
 
     float current_angle_rad;
@@ -222,7 +222,6 @@ bool MT6701_CalculateAngularVelocity(float *angular_velocity_rads) {
 
 void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads) {
     float angular_velocity;
-    MT6701_SPI_CompleteCallback(&hspi1);
     MT6701_CalculateAngularVelocity(&angular_velocity);
     float filtered_data = kalman_filter_dir(angular_velocity, MEASUREMENT_NOISE, PROCESS_NOISE);
     *filtered_velocity_rads = filtered_data;
@@ -230,14 +229,14 @@ void MT6701_FilteredAngularVelocity(float *filtered_velocity_rads) {
 
 
 
-// /**
-//  * @description: 回调函数（使用DMA进行连续的数据传输）
-//  * @param {SPI_HandleTypeDef} *hspi
-//  * @return {*}
-//  */
-// void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
-//     MT6701_SPI_CompleteCallback(hspi);  // SPI传输完成回调函数
-// }
+/**
+ * @description: 回调函数（使用DMA进行连续的数据传输）
+ * @param {SPI_HandleTypeDef} *hspi
+ * @return {*}
+ */
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
+    MT6701_SPI_CompleteCallback(hspi);  // SPI传输完成回调函数
+}
 
 
 // // /**
