@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-16 18:39:56
+ * @LastEditTime: 2025-09-17 16:58:30
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -21,6 +21,13 @@
 // 磁定向控制的结构体变量
 SVPWM_HandleTypeDef SguanSVPWM;
 FOC_HandleTypeDef SguanFOC;
+
+// 默认模式与目标量
+FOC_Mode_t FOC_Mode = FOC_MODE_NONE;
+float FOC_Target_Position = 0.0f;
+float FOC_Target_Speed = 0.0f;
+float FOC_Target_Current = 0.0f;
+float FOC_Target_Voltage = 0.2f;
 
 // 开环速度控制相关变量
 static float electrical_angle = 0.0f;   // 电角度（弧度）
@@ -236,208 +243,508 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
 }
 
 
-/**
- * @description: [Mode3]FOC开环电流控制（使用编码器速度进行前馈补偿）
- * @param {float} target_current_iq 期望的q轴电流（单位：A），正负代表扭矩方向
- * @note 这是一个开环函数。它输出一个电压以期产生目标电流，但实际电流会有误差。
- *        电机最终达到的速度由目标电流和负载共同决定。
- */
-void FOC_OpenCurrent_Loop(float target_current_iq) {
-    // 1. 获取当前机械角度
-    float mechanical_angle_rad;
-    if (!MT6701_ReadAngle(&mechanical_angle_rad)) {
-        return;
-    }
-    // 2. 计算电角度（考虑对齐偏移）
-    float raw_electrical_angle = (mechanical_angle_rad + alignment_angle_offset) * Pole_Pairs;
-    SguanSVPWM.theta = normalize_angle(raw_electrical_angle);
-    
-    // 3. 获取角速度（用于前馈补偿）
-    float mechanical_velocity_rads;
-    MT6701_FilteredAngularVelocity(&mechanical_velocity_rads);
-    float electrical_velocity_rads = mechanical_velocity_rads * Pole_Pairs;
-    
-    // 4. 使用电机模型计算所需的q轴电压
-    float u_q_feedforward;
-    if (target_current_iq == 0.0f) {
-        u_q_feedforward = 0.0f;
-    } else {
-        u_q_feedforward = target_current_iq * MOTOR_RESISTANCE;
-    }
-    // 5. 限制输出电压（使用标幺值）
-    float u_q_max = 0.95f;
-    u_q_feedforward = constrain(u_q_feedforward / Motor_Vbus, -u_q_max, u_q_max);
-    
-    // 6. 更新SVPWM指令
-    SguanSVPWM.u_q = u_q_feedforward;
-    SguanSVPWM.u_d = 0.0f;
-    
-    // 7. 生成SVPWM波形
-    generate_svpwm_waveforms();
-}
-
-
-
-// PID参数设置的函数
-void FOC_SetPositionPID(float Kp, float Ki, float Kd, float Output_limit) {
-    SguanFOC.Position_PID.Kp = Kp;
-    SguanFOC.Position_PID.Ki = Ki;
-    SguanFOC.Position_PID.Kd = Kd;
-    SguanFOC.Position_PID.Output_limit = Output_limit;
-    // 重置积分项和上一次误差
-    SguanFOC.Position_PID.Integral = 0.0f;
-    SguanFOC.Position_PID.Prev_error = 0.0f;
-}
-
 
 /**
- * @description: [Mode4]FOC闭环绝对位置控制（带多圈功能，使用完整PID）
- * @param {float} target_angle_rad 目标绝对角度（弧度），可以超过2π
- * @param {float} voltage 基准电压幅值(0-1)，PID输出会在此基础上调整
+ * @description: [Mode3]FOC位置单环闭环控制
+ * @param {float} target_angle_rad  目标多圈位置 (弧度)
  */
-void FOC_CloseAbsolutePos_Loop(float target_angle_rad, float max_voltage) {
-    static uint32_t prev_time_ms = 0;
-    uint32_t current_time_ms = HAL_GetTick();
-    
-    if (prev_time_ms == 0) {
-        prev_time_ms = current_time_ms;
-        return;
+void FOC_Position_SingleLoop(float target_angle_rad) {
+    float actual_angle_rad;
+    if (!MT6701_ReadMultiTurnAngle(&actual_angle_rad)) {
+        return; // 读取失败直接退出
     }
-    
-    float dt_ms = (float)(current_time_ms - prev_time_ms);
-    prev_time_ms = current_time_ms;
-    if (dt_ms > 100) dt_ms = 10; // 限幅
-    float dt = dt_ms / 1000.0f;
 
-    // 读取当前多圈机械角度
-    float current_mechanical_angle;
-    if (!MT6701_ReadMultiTurnAngle(&current_mechanical_angle)) return;
+    // --- 1. 误差计算 ---
+    float error = target_angle_rad - actual_angle_rad;
 
-    // 转换为电角度
-    float current_electrical_angle = (current_mechanical_angle + alignment_angle_offset) * Pole_Pairs;
-    current_electrical_angle = normalize_angle(current_electrical_angle);
+    // --- 2. PID控制器 ---
+    float *Kp = &SguanFOC.Position_PID.Kp;
+    float *Ki = &SguanFOC.Position_PID.Ki;
+    float *Kd = &SguanFOC.Position_PID.Kd;
+    float *Integral = &SguanFOC.Position_PID.Integral;
+    float *Prev_error = &SguanFOC.Position_PID.Prev_error;
+    float limit = SguanFOC.Position_PID.Output_limit;
 
-    // 目标电角度
-    float target_electrical_angle = target_angle_rad * Pole_Pairs;
-    target_electrical_angle = normalize_angle(target_electrical_angle);
+    *Integral += error;
+    // 防止积分过大
+    if (*Integral > limit) *Integral = limit;
+    if (*Integral < -limit) *Integral = -limit;
 
-    // 计算误差并归一化
-    float error = target_electrical_angle - current_electrical_angle;
-    if (error > PI) error -= 2 * PI;
-    else if (error < -PI) error += 2 * PI;
+    float derivative = error - *Prev_error;
+    *Prev_error = error;
 
-    // PID计算
-    float P = SguanFOC.Position_PID.Kp * error;
-    SguanFOC.Position_PID.Integral += error * dt;
-    SguanFOC.Position_PID.Integral = constrain(SguanFOC.Position_PID.Integral, 
-                                              -SguanFOC.Position_PID.Output_limit / SguanFOC.Position_PID.Ki, 
-                                              SguanFOC.Position_PID.Output_limit / SguanFOC.Position_PID.Ki);
-    float I = SguanFOC.Position_PID.Ki * SguanFOC.Position_PID.Integral;
-    float derivative = (error - SguanFOC.Position_PID.Prev_error) / dt;
-    float D = SguanFOC.Position_PID.Kd * derivative;
-    SguanFOC.Position_PID.Prev_error = error;
+    float pid_output = (*Kp * error) + (*Ki * (*Integral)) + (*Kd * derivative);
 
-    float pid_output = P + I + D;
-    pid_output = constrain(pid_output, -SguanFOC.Position_PID.Output_limit, SguanFOC.Position_PID.Output_limit);
+    // --- 3. 限幅 ---
+    pid_output = constrain(pid_output, -limit, limit);
 
-    // 转换为电压指令
-    float u_q = pid_output * max_voltage;
-    u_q = constrain(u_q, -max_voltage, max_voltage);
-
-    // 更新SVPWM
-    SguanSVPWM.u_q = u_q;
+    // --- 4. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output; // 误差越大，扭矩越大
     SguanSVPWM.u_d = 0.0f;
-    SguanSVPWM.theta = current_electrical_angle; // 使用反馈角度
+
+    // 实际电角度 = 机械角度 * 极对数 + 偏移
+    SguanSVPWM.theta = normalize_angle((actual_angle_rad + alignment_angle_offset) * Pole_Pairs);
+
+    // --- 5. 输出SVPWM ---
     generate_svpwm_waveforms();
 }
 
 
 /**
- * @description: 设置速度环PID参数
- * @param {float} Kp 比例系数
- * @param {float} Ki 积分系数
- * @param {float} Kd 微分系数
- * @param {float} Output_limit 输出限制
+ * @description: [Mode4]FOC速度单环闭环控制
+ * @param {float} target_speed_rad_s 目标速度 (rad/s)
  */
-void FOC_SetVelocityPID(float Kp, float Ki, float Kd, float Output_limit) {
-    SguanFOC.Velocity_PID.Kp = Kp;
-    SguanFOC.Velocity_PID.Ki = Ki;
-    SguanFOC.Velocity_PID.Kd = Kd;
-    SguanFOC.Velocity_PID.Output_limit = Output_limit;
-    // 重置积分项和上一次误差
-    SguanFOC.Velocity_PID.Integral = 0.0f;
-    SguanFOC.Velocity_PID.Prev_error = 0.0f;
+void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
+    float actual_speed_rad_s;
+    MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+
+    // --- 1. 误差计算 ---
+    float error = target_speed_rad_s - actual_speed_rad_s;
+
+    // --- 2. PID控制器 ---
+    float *Kp = &SguanFOC.Velocity_PID.Kp;
+    float *Ki = &SguanFOC.Velocity_PID.Ki;
+    float *Kd = &SguanFOC.Velocity_PID.Kd;
+    float *Integral = &SguanFOC.Velocity_PID.Integral;
+    float *Prev_error = &SguanFOC.Velocity_PID.Prev_error;
+    float limit = SguanFOC.Velocity_PID.Output_limit;
+
+    *Integral += error;
+    if (*Integral > limit) *Integral = limit;
+    if (*Integral < -limit) *Integral = -limit;
+
+    float derivative = error - *Prev_error;
+    *Prev_error = error;
+
+    float pid_output = (*Kp * error) + (*Ki * (*Integral)) + (*Kd * derivative);
+
+    // --- 3. 限幅 ---
+    pid_output = constrain(pid_output, -limit, limit);
+
+    // --- 4. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output;
+    SguanSVPWM.u_d = 0.0f;
+
+    // 实际电角度 = 机械角度 * 极对数 + 偏移
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+
+    // --- 5. 输出SVPWM ---
+    generate_svpwm_waveforms();
 }
 
 
 /**
- * @description: [Mode5]FOC闭环速度控制
- * @param {float} target_velocity_rads 目标机械角速度（弧度/秒）
- * @param {float} max_voltage 最大允许电压（0-1范围）
+ * @description: [Mode5]FOC电流单环闭环控制
+ * @param {float} target_iq 目标q轴电流 (A)
  */
-void FOC_CloseVelocity_Loop(float target_velocity_rads, float max_voltage) {
-    static uint32_t prev_time_ms = 0;
-    static float prev_electrical_angle = 0.0f; // 保存上一次电角度
+void FOC_Current_SingleLoop(float target_iq) {
+    // --- 1. 获取实际Iq ---
+    float actual_iq = FOC_Calculate_Iq();
 
-    uint32_t current_time_ms = HAL_GetTick();
-    float dt_ms = (float)(current_time_ms - prev_time_ms);
-    prev_time_ms = current_time_ms;
-    if (dt_ms == 0) dt_ms = 1.0f;
-    float dt = dt_ms / 1000.0f;
+    // --- 2. 误差计算 ---
+    float error = target_iq - actual_iq;
 
-    // 读取当前实际速度
-    float actual_velocity_rads;
-    MT6701_FilteredAngularVelocity(&actual_velocity_rads);
+    // --- 3. PID控制器 ---
+    float *Kp = &SguanFOC.Current_PID.Kp;
+    float *Ki = &SguanFOC.Current_PID.Ki;
+    float *Kd = &SguanFOC.Current_PID.Kd;
+    float *Integral = &SguanFOC.Current_PID.Integral;
+    float *Prev_error = &SguanFOC.Current_PID.Prev_error;
+    float limit = SguanFOC.Current_PID.Output_limit;
 
-    if (actual_velocity_rads == 0.0f) {
-        // 后备：使用开环控制，但保留上一次电角度
-        SguanSVPWM.u_q = max_voltage * 0.3f;
-        SguanSVPWM.u_d = 0.0f;
-        SguanSVPWM.theta = prev_electrical_angle; // 使用上一次角度
-        generate_svpwm_waveforms();
-        return;
-    }
+    *Integral += error;
+    if (*Integral > limit) *Integral = limit;
+    if (*Integral < -limit) *Integral = -limit;
 
-    float error = target_velocity_rads - actual_velocity_rads;
+    float derivative = error - *Prev_error;
+    *Prev_error = error;
 
-    // PID计算
-    float P = SguanFOC.Velocity_PID.Kp * error;
+    float pid_output = (*Kp * error) + (*Ki * (*Integral)) + (*Kd * derivative);
 
-    // 积分项（抗饱和 + 防除零）
-    SguanFOC.Velocity_PID.Integral += error * dt;
-    if (SguanFOC.Velocity_PID.Ki > 1e-6f) {
-        float max_integral = SguanFOC.Velocity_PID.Output_limit / SguanFOC.Velocity_PID.Ki;
-        SguanFOC.Velocity_PID.Integral = constrain(SguanFOC.Velocity_PID.Integral, -max_integral, max_integral);
-    }
-    float I = SguanFOC.Velocity_PID.Ki * SguanFOC.Velocity_PID.Integral;
+    // --- 4. 限幅 ---
+    pid_output = constrain(pid_output, -limit, limit);
 
-    // 微分项
-    float derivative = (error - SguanFOC.Velocity_PID.Prev_error) / dt;
-    float D = SguanFOC.Velocity_PID.Kd * derivative;
-    SguanFOC.Velocity_PID.Prev_error = error;
-
-    // 前馈项（可选）
-    float feedforward = target_velocity_rads * 0.1f; // 示例：速度前馈增益
-
-    float pid_output = P + I + D + feedforward;
-    pid_output = constrain(pid_output, -SguanFOC.Velocity_PID.Output_limit, SguanFOC.Velocity_PID.Output_limit);
-
-    // 转换为电压指令
-    float u_q = pid_output;
-    u_q = constrain(u_q, -max_voltage, max_voltage);
-
-    // 获取当前电角度
-    float mechanical_angle_rad;
-    if (MT6701_ReadAngle(&mechanical_angle_rad)) {
-        float electrical_angle = (mechanical_angle_rad + alignment_angle_offset) * Pole_Pairs;
-        SguanSVPWM.theta = normalize_angle(electrical_angle);
-        prev_electrical_angle = SguanSVPWM.theta; // 保存当前角度
-    } else {
-        SguanSVPWM.theta = prev_electrical_angle; // 使用上一次角度
-    }
-
-    SguanSVPWM.u_q = u_q;
+    // --- 5. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output;
     SguanSVPWM.u_d = 0.0f;
+
+    // 实际电角度 = (机械角度 + 偏移) * 极对数
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+
+    // --- 6. 输出SVPWM ---
     generate_svpwm_waveforms();
 }
 
+
+
+/**
+ * @description: [Mode7] FOC速度-电流串级控制（电流环比速度环快7倍）
+ * @param {float} target_speed_rad_s 目标速度 (rad/s)
+ */
+void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
+    static uint8_t speed_loop_counter = 0;
+    static float Iq_ref = 0.0f;  // 缓存速度环计算出的目标电流
+
+    // --- 1. 外环速度PID (每7次执行一次) ---
+    if (speed_loop_counter == 0) {
+        float actual_speed_rad_s;
+        MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+
+        float v_error = target_speed_rad_s - actual_speed_rad_s;
+
+        float *vKp = &SguanFOC.Velocity_Current_Cascade.Velocity.Kp;
+        float *vKi = &SguanFOC.Velocity_Current_Cascade.Velocity.Ki;
+        float *vKd = &SguanFOC.Velocity_Current_Cascade.Velocity.Kd;
+        float *vIntegral = &SguanFOC.Velocity_Current_Cascade.Velocity.Integral;
+        float *vPrev_error = &SguanFOC.Velocity_Current_Cascade.Velocity.Prev_error;
+        float v_limit = SguanFOC.Velocity_Current_Cascade.Velocity.Output_limit;
+
+        *vIntegral += v_error;
+        if (*vIntegral > v_limit) *vIntegral = v_limit;
+        if (*vIntegral < -v_limit) *vIntegral = -v_limit;
+
+        float v_derivative = v_error - *vPrev_error;
+        *vPrev_error = v_error;
+
+        Iq_ref = (*vKp * v_error) + (*vKi * (*vIntegral)) + (*vKd * v_derivative);
+
+        // 限幅目标电流
+        Iq_ref = constrain(Iq_ref, -SguanFOC.Velocity_Current_Cascade.Current.Output_limit,
+                                    SguanFOC.Velocity_Current_Cascade.Current.Output_limit);
+    }
+
+    // --- 2. 内环电流PID (每次都执行) ---
+    float actual_iq = FOC_Calculate_Iq();
+    float c_error = Iq_ref - actual_iq;
+
+    float *cKp = &SguanFOC.Velocity_Current_Cascade.Current.Kp;
+    float *cKi = &SguanFOC.Velocity_Current_Cascade.Current.Ki;
+    float *cKd = &SguanFOC.Velocity_Current_Cascade.Current.Kd;
+    float *cIntegral = &SguanFOC.Velocity_Current_Cascade.Current.Integral;
+    float *cPrev_error = &SguanFOC.Velocity_Current_Cascade.Current.Prev_error;
+    float c_limit = SguanFOC.Velocity_Current_Cascade.Current.Output_limit;
+
+    *cIntegral += c_error;
+    if (*cIntegral > c_limit) *cIntegral = c_limit;
+    if (*cIntegral < -c_limit) *cIntegral = -c_limit;
+
+    float c_derivative = c_error - *cPrev_error;
+    *cPrev_error = c_error;
+
+    float pid_output_current = (*cKp * c_error) + (*cKi * (*cIntegral)) + (*cKd * c_derivative);
+
+    // 限幅
+    pid_output_current = constrain(pid_output_current, -c_limit, c_limit);
+
+    // --- 3. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output_current;
+    SguanSVPWM.u_d = 0.0f;
+
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+
+    generate_svpwm_waveforms();
+
+    // --- 4. 更新速度环计数器 ---
+    speed_loop_counter++;
+    if (speed_loop_counter >= 7) {
+        speed_loop_counter = 0;
+    }
+}
+
+
+/**
+ * @description: [Mode8] FOC位置-速度串级控制（速度环比位置环快7倍）
+ * @param {float} target_angle_rad 目标位置 (rad，多圈角度)
+ */
+void FOC_Position_Velocity_Cascade_FastInner(float target_angle_rad) {
+    static uint8_t pos_loop_counter = 0;
+    static float velocity_ref = 0.0f;  // 缓存位置环计算出的目标速度
+
+    // --- 1. 外环位置PID (每7次执行一次) ---
+    if (pos_loop_counter == 0) {
+        float actual_angle_rad;
+        if (!MT6701_ReadMultiTurnAngle(&actual_angle_rad)) {
+            return; // 如果读取失败，直接退出
+        }
+
+        float p_error = target_angle_rad - actual_angle_rad;
+
+        float *pKp = &SguanFOC.Position_Velocity_Cascade.Position.Kp;
+        float *pKi = &SguanFOC.Position_Velocity_Cascade.Position.Ki;
+        float *pKd = &SguanFOC.Position_Velocity_Cascade.Position.Kd;
+        float *pIntegral = &SguanFOC.Position_Velocity_Cascade.Position.Integral;
+        float *pPrev_error = &SguanFOC.Position_Velocity_Cascade.Position.Prev_error;
+        float p_limit = SguanFOC.Position_Velocity_Cascade.Position.Output_limit;
+
+        *pIntegral += p_error;
+        if (*pIntegral > p_limit) *pIntegral = p_limit;
+        if (*pIntegral < -p_limit) *pIntegral = -p_limit;
+
+        float p_derivative = p_error - *pPrev_error;
+        *pPrev_error = p_error;
+
+        velocity_ref = (*pKp * p_error) + (*pKi * (*pIntegral)) + (*pKd * p_derivative);
+
+        // 限幅目标速度
+        velocity_ref = constrain(velocity_ref,
+                                 -SguanFOC.Position_Velocity_Cascade.Velocity.Output_limit,
+                                  SguanFOC.Position_Velocity_Cascade.Velocity.Output_limit);
+    }
+
+    // --- 2. 内环速度PID (每次执行) ---
+    float actual_speed_rad_s;
+    MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+
+    float v_error = velocity_ref - actual_speed_rad_s;
+
+    float *vKp = &SguanFOC.Position_Velocity_Cascade.Velocity.Kp;
+    float *vKi = &SguanFOC.Position_Velocity_Cascade.Velocity.Ki;
+    float *vKd = &SguanFOC.Position_Velocity_Cascade.Velocity.Kd;
+    float *vIntegral = &SguanFOC.Position_Velocity_Cascade.Velocity.Integral;
+    float *vPrev_error = &SguanFOC.Position_Velocity_Cascade.Velocity.Prev_error;
+    float v_limit = SguanFOC.Position_Velocity_Cascade.Velocity.Output_limit;
+
+    *vIntegral += v_error;
+    if (*vIntegral > v_limit) *vIntegral = v_limit;
+    if (*vIntegral < -v_limit) *vIntegral = -v_limit;
+
+    float v_derivative = v_error - *vPrev_error;
+    *vPrev_error = v_error;
+
+    float pid_output_velocity = (*vKp * v_error) + (*vKi * (*vIntegral)) + (*vKd * v_derivative);
+
+    // 限幅
+    pid_output_velocity = constrain(pid_output_velocity, -v_limit, v_limit);
+
+    // --- 3. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output_velocity;
+    SguanSVPWM.u_d = 0.0f;
+
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+
+    generate_svpwm_waveforms();
+
+    // --- 4. 更新位置环计数器 ---
+    pos_loop_counter++;
+    if (pos_loop_counter >= 7) {
+        pos_loop_counter = 0;
+    }
+}
+
+
+/**
+ * @description: [Mode9] FOC位置-速度-电流三环串级控制
+ *               电流环比速度环快5倍，速度环比位置环快5倍
+ * @param {float} target_angle_rad 目标位置 (rad，多圈角度)
+ */
+void FOC_Position_Velocity_Current_Cascade_Triple(float target_angle_rad) {
+    static uint8_t pos_counter = 0;   // 位置环计数器
+    static uint8_t vel_counter = 0;   // 速度环计数器
+    static float velocity_ref = 0.0f; // 缓存位置环输出
+    static float Iq_ref = 0.0f;       // 缓存速度环输出
+
+    // --- 1. 位置环 (每25次执行1次) ---
+    if (pos_counter == 0) {
+        float actual_angle_rad;
+        if (MT6701_ReadMultiTurnAngle(&actual_angle_rad)) {
+            float p_error = target_angle_rad - actual_angle_rad;
+
+            float *pKp = &SguanFOC.Position_Velocity_Current_Cascade.Position.Kp;
+            float *pKi = &SguanFOC.Position_Velocity_Current_Cascade.Position.Ki;
+            float *pKd = &SguanFOC.Position_Velocity_Current_Cascade.Position.Kd;
+            float *pIntegral = &SguanFOC.Position_Velocity_Current_Cascade.Position.Integral;
+            float *pPrev_error = &SguanFOC.Position_Velocity_Current_Cascade.Position.Prev_error;
+            float p_limit = SguanFOC.Position_Velocity_Current_Cascade.Position.Output_limit;
+
+            *pIntegral += p_error;
+            if (*pIntegral > p_limit) *pIntegral = p_limit;
+            if (*pIntegral < -p_limit) *pIntegral = -p_limit;
+
+            float p_derivative = p_error - *pPrev_error;
+            *pPrev_error = p_error;
+
+            velocity_ref = (*pKp * p_error) + (*pKi * (*pIntegral)) + (*pKd * p_derivative);
+
+            // 限幅目标速度
+            velocity_ref = constrain(velocity_ref,
+                                     -SguanFOC.Position_Velocity_Current_Cascade.Velocity.Output_limit,
+                                      SguanFOC.Position_Velocity_Current_Cascade.Velocity.Output_limit);
+        }
+    }
+
+    // --- 2. 速度环 (每5次执行1次) ---
+    if (vel_counter == 0) {
+        float actual_speed_rad_s;
+        MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+
+        float v_error = velocity_ref - actual_speed_rad_s;
+
+        float *vKp = &SguanFOC.Position_Velocity_Current_Cascade.Velocity.Kp;
+        float *vKi = &SguanFOC.Position_Velocity_Current_Cascade.Velocity.Ki;
+        float *vKd = &SguanFOC.Position_Velocity_Current_Cascade.Velocity.Kd;
+        float *vIntegral = &SguanFOC.Position_Velocity_Current_Cascade.Velocity.Integral;
+        float *vPrev_error = &SguanFOC.Position_Velocity_Current_Cascade.Velocity.Prev_error;
+        float v_limit = SguanFOC.Position_Velocity_Current_Cascade.Velocity.Output_limit;
+
+        *vIntegral += v_error;
+        if (*vIntegral > v_limit) *vIntegral = v_limit;
+        if (*vIntegral < -v_limit) *vIntegral = -v_limit;
+
+        float v_derivative = v_error - *vPrev_error;
+        *vPrev_error = v_error;
+
+        Iq_ref = (*vKp * v_error) + (*vKi * (*vIntegral)) + (*vKd * v_derivative);
+
+        // 限幅目标电流
+        Iq_ref = constrain(Iq_ref,
+                           -SguanFOC.Position_Velocity_Current_Cascade.Current.Output_limit,
+                            SguanFOC.Position_Velocity_Current_Cascade.Current.Output_limit);
+    }
+
+    // --- 3. 电流环 (每次都执行) ---
+    float actual_iq = FOC_Calculate_Iq();
+    float c_error = Iq_ref - actual_iq;
+
+    float *cKp = &SguanFOC.Position_Velocity_Current_Cascade.Current.Kp;
+    float *cKi = &SguanFOC.Position_Velocity_Current_Cascade.Current.Ki;
+    float *cKd = &SguanFOC.Position_Velocity_Current_Cascade.Current.Kd;
+    float *cIntegral = &SguanFOC.Position_Velocity_Current_Cascade.Current.Integral;
+    float *cPrev_error = &SguanFOC.Position_Velocity_Current_Cascade.Current.Prev_error;
+    float c_limit = SguanFOC.Position_Velocity_Current_Cascade.Current.Output_limit;
+
+    *cIntegral += c_error;
+    if (*cIntegral > c_limit) *cIntegral = c_limit;
+    if (*cIntegral < -c_limit) *cIntegral = -c_limit;
+
+    float c_derivative = c_error - *cPrev_error;
+    *cPrev_error = c_error;
+
+    float pid_output_current = (*cKp * c_error) + (*cKi * (*cIntegral)) + (*cKd * c_derivative);
+
+    // 限幅
+    pid_output_current = constrain(pid_output_current, -c_limit, c_limit);
+
+    // --- 4. 设置FOC电压 ---
+    SguanSVPWM.u_q = pid_output_current;
+    SguanSVPWM.u_d = 0.0f;
+
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+
+    generate_svpwm_waveforms();
+
+    // --- 5. 更新计数器 ---
+    vel_counter++;
+    if (vel_counter >= 5) vel_counter = 0;
+
+    pos_counter++;
+    if (pos_counter >= 25) pos_counter = 0;
+}
+
+
+// 电机多环调控运行函数
+void FOC_LoopHandler(void) {
+    switch (FOC_Mode) {
+        // --- 开环 ---
+        case FOC_MODE_OPEN_POSITION:
+            // 注意：开环角度用度数作为输入
+            FOC_OpenPosition_Loop((FOC_Target_Position / (2.0f * PI)) * 360.0f, FOC_Target_Voltage);
+            break;
+        case FOC_MODE_OPEN_VELOCITY:
+            FOC_OpenVelocity_Loop(FOC_Target_Speed, FOC_Target_Voltage);
+            break;
+
+        // --- 单环闭环 ---
+        case FOC_MODE_POSITION_SINGLE:
+            FOC_Position_SingleLoop(FOC_Target_Position);
+            break;
+        case FOC_MODE_VELOCITY_SINGLE:
+            FOC_Velocity_SingleLoop(FOC_Target_Speed);
+            break;
+        case FOC_MODE_CURRENT_SINGLE:
+            FOC_Current_SingleLoop(FOC_Target_Current);
+            break;
+
+        // --- 双环闭环 ---
+        case FOC_MODE_POSITION_VELOCITY_CASCADE:
+            FOC_Position_Velocity_Cascade_FastInner(FOC_Target_Position);
+            break;
+        case FOC_MODE_VELOCITY_CURRENT_CASCADE:
+            FOC_Velocity_Current_Cascade_FastInner(FOC_Target_Speed);
+            break;
+
+        // --- 三环闭环 ---
+        case FOC_MODE_POSITION_VELOCITY_CURRENT_CASCADE:
+            FOC_Position_Velocity_Current_Cascade_Triple(FOC_Target_Position);
+            break;
+        default:
+            // 默认空闲：关电机
+            SguanSVPWM.u_q = 0.0f;
+            SguanSVPWM.u_d = 0.0f;
+            generate_svpwm_waveforms();
+            break;
+    }
+}
+
+
+/**
+ * @description: 设置指定环路的PID参数
+ * @param loop   "pos", "vel", "cur",
+ *               "pos_vel", "vel_cur", "pos_vel_cur"
+ * @param kp     比例系数
+ * @param ki     积分系数
+ * @param kd     微分系数
+ * @param limit  输出限幅
+ */
+void FOC_SetPIDParams(const char *loop, float kp, float ki, float kd, float limit) {
+    if (strcmp(loop, "pos") == 0) {
+        SguanFOC.Position_PID.Kp = kp;
+        SguanFOC.Position_PID.Ki = ki;
+        SguanFOC.Position_PID.Kd = kd;
+        SguanFOC.Position_PID.Output_limit = limit;
+    }
+    else if (strcmp(loop, "vel") == 0) {
+        SguanFOC.Velocity_PID.Kp = kp;
+        SguanFOC.Velocity_PID.Ki = ki;
+        SguanFOC.Velocity_PID.Kd = kd;
+        SguanFOC.Velocity_PID.Output_limit = limit;
+    }
+    else if (strcmp(loop, "cur") == 0) {
+        SguanFOC.Current_PID.Kp = kp;
+        SguanFOC.Current_PID.Ki = ki;
+        SguanFOC.Current_PID.Kd = kd;
+        SguanFOC.Current_PID.Output_limit = limit;
+    }
+    else if (strcmp(loop, "pos_vel") == 0) {
+        SguanFOC.Position_Velocity_Cascade.Position.Kp = kp;
+        SguanFOC.Position_Velocity_Cascade.Position.Ki = ki;
+        SguanFOC.Position_Velocity_Cascade.Position.Kd = kd;
+        SguanFOC.Position_Velocity_Cascade.Position.Output_limit = limit;
+    }
+    else if (strcmp(loop, "vel_cur") == 0) {
+        SguanFOC.Velocity_Current_Cascade.Velocity.Kp = kp;
+        SguanFOC.Velocity_Current_Cascade.Velocity.Ki = ki;
+        SguanFOC.Velocity_Current_Cascade.Velocity.Kd = kd;
+        SguanFOC.Velocity_Current_Cascade.Velocity.Output_limit = limit;
+    }
+    else if (strcmp(loop, "pos_vel_cur") == 0) {
+        SguanFOC.Position_Velocity_Current_Cascade.Position.Kp = kp;
+        SguanFOC.Position_Velocity_Current_Cascade.Position.Ki = ki;
+        SguanFOC.Position_Velocity_Current_Cascade.Position.Kd = kd;
+        SguanFOC.Position_Velocity_Current_Cascade.Position.Output_limit = limit;
+    }
+}
