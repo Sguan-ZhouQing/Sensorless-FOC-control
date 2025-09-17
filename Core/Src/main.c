@@ -101,9 +101,7 @@ int main(void)
   MX_TIM2_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
-  // HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_15);
   FOC_Init();
-  FOC_SetPositionPID(0.5f, 0.001f, 0.0f, 0.2f);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -111,16 +109,15 @@ int main(void)
   while (1)
   {
     HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_15);
-    // FOC_OpenVelocity_Loop(Adjustable_Data,0.2f);
-    // FOC_OpenCurrent_Loop(Adjustable_Data);
+    // FOC_OpenVelocity_Loop(Adjustable_Data,0.7f);
     // FOC_OpenPosition_Loop(Adjustable_Data,0.2f);
-    FOC_CloseAbsolutePos_Loop(Adjustable_Data,0.3f);
+
     float num;
     num = FOC_Calculate_Iq();
     float count_num;
     MT6701_FilteredAngularVelocity(&count_num);
-    printf("%.5f,%.5f\n",num,count_num);
-    HAL_Delay(10);
+    printf("%.5f,%.5f,%.5f\n",num,Adjustable_Data,count_num);
+    HAL_Delay(1);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
