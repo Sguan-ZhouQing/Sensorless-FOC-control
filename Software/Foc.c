@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-17 16:58:30
+ * @LastEditTime: 2025-09-24 18:44:51
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -207,8 +207,8 @@ void FOC_OpenPosition_Loop(float angle_deg, float voltage) {
     float mechanical_angle = (angle_deg / 360.0f) * 2.0f * PI;
     SguanSVPWM.theta = normalize_angle(mechanical_angle * Pole_Pairs);
     // 2. 设置电压（控制转矩）
-    SguanSVPWM.u_q = voltage;
-    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f;
+    SguanSVPWM.u_d = voltage;
     // 3. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
@@ -238,6 +238,20 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
     // 6. 设置电压（控制转矩）
     SguanSVPWM.u_q = voltage;
     SguanSVPWM.u_d = 0.0f;
+    // 7. 生成SVPWM波形
+    generate_svpwm_waveforms();
+}
+
+
+
+void FOC_OpenVelocityAAA_Loop(float voltage) {
+    float mech_angle_rad;
+    if (MT6701_ReadAngle(&mech_angle_rad)) {
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+    }
+    // 6. 设置电压（控制转矩）
+    SguanSVPWM.u_q = 0.0f;
+    SguanSVPWM.u_d = voltage;
     // 7. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
@@ -279,8 +293,8 @@ void FOC_Position_SingleLoop(float target_angle_rad) {
     pid_output = constrain(pid_output, -limit, limit);
 
     // --- 4. 设置FOC电压 ---
-    SguanSVPWM.u_q = pid_output; // 误差越大，扭矩越大
-    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f; // 误差越大，扭矩越大
+    SguanSVPWM.u_d = pid_output;
 
     // 实际电角度 = 机械角度 * 极对数 + 偏移
     SguanSVPWM.theta = normalize_angle((actual_angle_rad + alignment_angle_offset) * Pole_Pairs);
@@ -322,8 +336,8 @@ void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
     pid_output = constrain(pid_output, -limit, limit);
 
     // --- 4. 设置FOC电压 ---
-    SguanSVPWM.u_q = pid_output;
-    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f;
+    SguanSVPWM.u_d = pid_output;
 
     // 实际电角度 = 机械角度 * 极对数 + 偏移
     float mech_angle_rad;
@@ -384,7 +398,7 @@ void FOC_Current_SingleLoop(float target_iq) {
 
 
 /**
- * @description: [Mode7] FOC速度-电流串级控制（电流环比速度环快7倍）
+ * @description: [Mode6] FOC速度-电流串级控制（电流环比速度环快7倍）
  * @param {float} target_speed_rad_s 目标速度 (rad/s)
  */
 void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
@@ -462,7 +476,7 @@ void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
 
 
 /**
- * @description: [Mode8] FOC位置-速度串级控制（速度环比位置环快7倍）
+ * @description: [Mode7] FOC位置-速度串级控制（速度环比位置环快7倍）
  * @param {float} target_angle_rad 目标位置 (rad，多圈角度)
  */
 void FOC_Position_Velocity_Cascade_FastInner(float target_angle_rad) {
@@ -545,7 +559,7 @@ void FOC_Position_Velocity_Cascade_FastInner(float target_angle_rad) {
 
 
 /**
- * @description: [Mode9] FOC位置-速度-电流三环串级控制
+ * @description: [Mode8] FOC位置-速度-电流三环串级控制
  *               电流环比速度环快5倍，速度环比位置环快5倍
  * @param {float} target_angle_rad 目标位置 (rad，多圈角度)
  */
