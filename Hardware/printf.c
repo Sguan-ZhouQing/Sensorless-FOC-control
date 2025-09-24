@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-05-26 15:32:26
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-13 14:26:21
+ * @LastEditTime: 2025-09-24 20:40:18
  * @FilePath: \demo_STM32F103FocCode\Hardware\printf.c
  * @Description: 使用USART串口收发和数据处理
  * @Key_GPIO: Many;
@@ -13,6 +13,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include "Foc.h"
 
 // 定义串口缓存区
 extern UART_HandleTypeDef huart2;
@@ -22,7 +23,7 @@ uint8_t RxBuffer[1];        // 串口接收缓冲
 uint16_t RxLine = 0;        // 指令长度
 uint8_t DataBuff[200];      // 指令内容
 // 全局可调变量
-float Adjustable_Data;
+float Adjustable_Data = 30.0f;
 
 
 // 支持printf函数，而不需要选择MicroLIB
@@ -82,11 +83,13 @@ void UART_SendFloats(float *data, uint8_t count, uint8_t decimal_places) {
 
 
 // 数据解析函数
+// 数据解析函数
 static float Get_Data(void) {
     uint8_t data_Start_Num = 0;
     uint8_t data_End_Num = 0;
     uint8_t minus_Flag = 0;
     float data_return = 0;
+    
     // 查找等号和问号的位置
     for(uint8_t i = 0; i < 200; i++) {
         if(DataBuff[i] == '=') data_Start_Num = i + 1;
@@ -100,27 +103,39 @@ static float Get_Data(void) {
         data_Start_Num += 1;
         minus_Flag = 1;
     }
-    // 简化数据处理逻辑
+    
     data_return = 0;
     uint8_t decimal_point = 0;
+    uint8_t decimal_digits = 0;  // 记录小数位数
+    
+    // 先找到小数点的位置
     for(uint8_t i = data_Start_Num; i <= data_End_Num; i++) {
         if(DataBuff[i] == '.') {
             decimal_point = i;
-            continue;
-        }
-        
-        if(decimal_point == 0) {
-            data_return = data_return * 10 + (DataBuff[i] - '0');
-        }
-        else {
-            float decimal_place = 0.1f;
-            for(uint8_t j = decimal_point + 1; j <= i; j++)
-            {
-                decimal_place *= 0.1f;
-            }
-            data_return += (DataBuff[i] - '0') * decimal_place;
+            break;
         }
     }
+    
+    // 处理整数部分和小数部分
+    for(uint8_t i = data_Start_Num; i <= data_End_Num; i++) {
+        if(DataBuff[i] == '.') {
+            continue;  // 跳过小数点
+        }
+        
+        if(i < decimal_point || decimal_point == 0) {
+            // 整数部分
+            data_return = data_return * 10 + (DataBuff[i] - '0');
+        } else {
+            // 小数部分：根据小数位的位置计算权重
+            decimal_digits++;
+            float decimal_weight = 1.0f;
+            for(uint8_t j = 0; j < decimal_digits; j++) {
+                decimal_weight *= 0.1f;
+            }
+            data_return += (DataBuff[i] - '0') * decimal_weight;
+        }
+    }
+    
     if(minus_Flag == 1) data_return = -data_return;
     return data_return;
 }
@@ -136,6 +151,21 @@ static void PID_Adjust(uint8_t Motor_n) {
         {
             // PID_Pos.P = data_Get;
             Adjustable_Data = data_Get;
+        }
+        if(DataBuff[0]=='P' && DataBuff[1]=='2')
+        {
+            // PID_Pos.P = data_Get;
+            SguanFOC.Velocity_PID.Kp = data_Get;
+        }
+        if(DataBuff[0]=='I' && DataBuff[1]=='2')
+        {
+            // PID_Pos.P = data_Get;
+            SguanFOC.Velocity_PID.Ki = data_Get;
+        }
+        if(DataBuff[0]=='D' && DataBuff[1]=='2')
+        {
+            // PID_Pos.P = data_Get;
+            SguanFOC.Velocity_PID.Kd = data_Get;
         }
         // 其他PID参数调整逻辑...
     }
