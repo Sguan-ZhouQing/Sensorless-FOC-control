@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-24 18:44:51
+ * @LastEditTime: 2025-09-24 20:56:46
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -35,6 +35,8 @@ static uint32_t last_time = 0;          // 上次更新时间
 
 // 初始"电角度"和"机械角度"对齐变量
 static float alignment_angle_offset = 0.0f;
+// 角度位置传感器延迟误差补偿
+static float SensorDelay_Error = 0.07f;
 
 // q轴电压计算值（INA199a1中间变量）
 #define Sqrt3 1.732050807568877f        // 根号3的浮点值
@@ -141,8 +143,8 @@ static float normalize_angle(float angle) {
  */
 void FOC_EncoderAlignment(void) {
     // 1. 注入d轴电流将转子拉到d轴位置
-    SguanSVPWM.u_d = 0.0f;  // 设置d轴电压
-    SguanSVPWM.u_q = 0.3f;  // 注入q轴电压
+    SguanSVPWM.u_d = 0.3f;  // 设置d轴电压
+    SguanSVPWM.u_q = 0.0f;  // 注入q轴电压
     SguanSVPWM.theta = 0.0f; // 假设电角度为0时q轴对齐
     // 生成SVPWM，将转子拉到d轴位置
     generate_svpwm_waveforms();
@@ -159,6 +161,8 @@ void FOC_EncoderAlignment(void) {
     SguanSVPWM.u_q = 0.0f;
     generate_svpwm_waveforms();
 }
+
+
 
 
 /**
@@ -236,26 +240,11 @@ void FOC_OpenVelocity_Loop(float velocity_rad_s, float voltage) {
     // 5. 设置电角度
     SguanSVPWM.theta = electrical_angle;
     // 6. 设置电压（控制转矩）
-    SguanSVPWM.u_q = voltage;
-    SguanSVPWM.u_d = 0.0f;
-    // 7. 生成SVPWM波形
-    generate_svpwm_waveforms();
-}
-
-
-
-void FOC_OpenVelocityAAA_Loop(float voltage) {
-    float mech_angle_rad;
-    if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
-    }
-    // 6. 设置电压（控制转矩）
     SguanSVPWM.u_q = 0.0f;
     SguanSVPWM.u_d = voltage;
     // 7. 生成SVPWM波形
     generate_svpwm_waveforms();
 }
-
 
 
 /**
@@ -336,13 +325,13 @@ void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
     pid_output = constrain(pid_output, -limit, limit);
 
     // --- 4. 设置FOC电压 ---
-    SguanSVPWM.u_q = 0.0f;
-    SguanSVPWM.u_d = pid_output;
+    SguanSVPWM.u_q = pid_output;
+    SguanSVPWM.u_d = 0.0f;
 
     // 实际电角度 = 机械角度 * 极对数 + 偏移
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset + PI*SensorDelay_Error) * Pole_Pairs);
     }
 
     // --- 5. 输出SVPWM ---
@@ -388,7 +377,7 @@ void FOC_Current_SingleLoop(float target_iq) {
     // 实际电角度 = (机械角度 + 偏移) * 极对数
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset + PI*SensorDelay_Error) * Pole_Pairs);
     }
 
     // --- 6. 输出SVPWM ---
@@ -462,7 +451,7 @@ void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
 
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs);
+        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset + PI*SensorDelay_Error) * Pole_Pairs);
     }
 
     generate_svpwm_waveforms();
@@ -540,8 +529,8 @@ void FOC_Position_Velocity_Cascade_FastInner(float target_angle_rad) {
     pid_output_velocity = constrain(pid_output_velocity, -v_limit, v_limit);
 
     // --- 3. 设置FOC电压 ---
-    SguanSVPWM.u_q = pid_output_velocity;
-    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f;
+    SguanSVPWM.u_d = pid_output_velocity;
 
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
@@ -651,8 +640,8 @@ void FOC_Position_Velocity_Current_Cascade_Triple(float target_angle_rad) {
     pid_output_current = constrain(pid_output_current, -c_limit, c_limit);
 
     // --- 4. 设置FOC电压 ---
-    SguanSVPWM.u_q = pid_output_current;
-    SguanSVPWM.u_d = 0.0f;
+    SguanSVPWM.u_q = 0.0f;
+    SguanSVPWM.u_d = pid_output_current;
 
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {

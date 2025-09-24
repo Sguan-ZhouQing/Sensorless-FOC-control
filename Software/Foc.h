@@ -159,7 +159,5 @@ void FOC_LoopHandler(void);
 // PID参数调节函数
 void FOC_SetPIDParams(const char *loop, float kp, float ki, float kd, float limit);
 
-void FOC_OpenVelocityAAA_Loop(float voltage);
-
 
 #endif // FOC_H
