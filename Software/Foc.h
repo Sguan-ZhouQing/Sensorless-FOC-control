@@ -154,6 +154,9 @@ void FOC_Current_SingleLoop(float target_iq);
 void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s);
 void FOC_Position_Velocity_Cascade_FastInner(float target_angle_rad);
 void FOC_Position_Velocity_Current_Cascade_Triple(float target_angle_rad);
+// 测试函数[专用]
+void FOC_Pos_Loop(float angle_rad, float voltage);
+void FOC_Vel_Loop(float voltage);
 // 多环运行调度函数
 void FOC_LoopHandler(void);
 // PID参数调节函数
