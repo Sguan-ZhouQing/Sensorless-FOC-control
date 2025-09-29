@@ -57,7 +57,12 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-
+// 角度归一化，将角度限制在0-2π范围内
+static float normalize(float angle) {
+    // 一次性处理所有情况
+    angle = fmodf(angle, 2.0f * PI);
+    return angle < 0 ? angle + 2.0f * PI : angle;
+}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -102,6 +107,7 @@ int main(void)
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   FOC_Init();
+  FOC_SetPIDParams("vel",0.14f,0.039f,0.01f,0.7f);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -109,15 +115,20 @@ int main(void)
   while (1)
   {
     HAL_GPIO_TogglePin(GPIOB,GPIO_PIN_15);
-    // FOC_OpenVelocity_Loop(Adjustable_Data,0.7f);
-    // FOC_OpenPosition_Loop(Adjustable_Data,0.2f);
+    // FOC_OpenVelocityAAA_Loop(Adjustable_Data);
+    // FOC_OpenVelocity_Loop(Adjustable_Data,0.5f);
+    // FOC_OpenPosition_Loop(Adjustable_Data,0.4f);
+    FOC_Velocity_SingleLoop(Adjustable_Data);
+    // FOC_Vel_Loop(Adjustable_Data);
+    // FOC_Position_SingleLoop(Adjustable_Data);
+    // FOC_Position_Loop(Adjustable_Data,0.4f);
 
-    float num;
-    num = FOC_Calculate_Iq();
+    // float num;
+    // MT6701_ReadAngle(&num);
     float count_num;
     MT6701_FilteredAngularVelocity(&count_num);
-    printf("%.5f,%.5f,%.5f\n",num,Adjustable_Data,count_num);
-    HAL_Delay(1);
+    printf("%.5f,%.5f,%.5f\n",Adjustable_Data,count_num,SguanSVPWM.u_q);
+    // HAL_Delay(10);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
