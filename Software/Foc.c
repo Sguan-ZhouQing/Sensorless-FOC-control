@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-28 19:58:07
+ * @LastEditTime: 2025-09-29 15:25:23
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -36,7 +36,7 @@ static uint32_t last_time = 0;          // 上次更新时间
 // 初始"电角度"和"机械角度"对齐变量
 static float alignment_angle_offset = 0.0f;
 // 角度位置传感器延迟误差补偿
-static float SensorDelay_Error = 1.4f;
+static float OPTIMAL_DELAY_TIME = 0.014f;
 
 // q轴电压计算值（INA199a1中间变量）
 #define Sqrt3 1.732050807568877f        // 根号3的浮点值
@@ -280,8 +280,8 @@ void FOC_Position_SingleLoop(float target_angle_rad) {
     pid_output = constrain(pid_output, -limit, limit);
 
     // --- 4. 设置FOC电压 ---
-    SguanSVPWM.u_q = 0.0f; // 误差越大，扭矩越大
-    SguanSVPWM.u_d = pid_output;
+    SguanSVPWM.u_q = pid_output; // 误差越大，扭矩越大
+    SguanSVPWM.u_d = 0.0f;
 
     // 实际电角度 = 机械角度 * 极对数 + 偏移
     SguanSVPWM.theta = normalize_angle((actual_angle_rad + alignment_angle_offset) * Pole_Pairs);
@@ -326,13 +326,16 @@ void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
     SguanSVPWM.u_q = pid_output;
     SguanSVPWM.u_d = 0.0f;
 
-    // 实际电角度 = 机械角度 * 极对数 + 偏移
+    // --- 5. 正确的角度补偿 ---
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs + SensorDelay_Error);
+        // 基于速度的角度超前补偿
+        float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
+        SguanSVPWM.theta = normalize_angle(
+            (mech_angle_rad + alignment_angle_offset) * Pole_Pairs + compensation);
     }
 
-    // --- 5. 输出SVPWM ---
+    // --- 6. 输出SVPWM ---
     generate_svpwm_waveforms();
 }
 
@@ -375,7 +378,12 @@ void FOC_Current_SingleLoop(float target_iq) {
     // 实际电角度 = (机械角度 + 偏移) * 极对数
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs + SensorDelay_Error);
+        float actual_speed_rad_s;
+        MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+        // 基于速度的角度超前补偿
+        float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
+        SguanSVPWM.theta = normalize_angle(
+            (mech_angle_rad + alignment_angle_offset) * Pole_Pairs + compensation);
     }
 
     // --- 6. 输出SVPWM ---
@@ -393,8 +401,8 @@ void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
     static float Iq_ref = 0.0f;  // 缓存速度环计算出的目标电流
 
     // --- 1. 外环速度PID (每7次执行一次) ---
+    float actual_speed_rad_s;
     if (speed_loop_counter == 0) {
-        float actual_speed_rad_s;
         MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
 
         float v_error = target_speed_rad_s - actual_speed_rad_s;
@@ -449,7 +457,10 @@ void FOC_Velocity_Current_Cascade_FastInner(float target_speed_rad_s) {
 
     float mech_angle_rad;
     if (MT6701_ReadAngle(&mech_angle_rad)) {
-        SguanSVPWM.theta = normalize_angle((mech_angle_rad + alignment_angle_offset) * Pole_Pairs + SensorDelay_Error);
+        // 基于速度的角度超前补偿
+        float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
+        SguanSVPWM.theta = normalize_angle(
+            (mech_angle_rad + alignment_angle_offset) * Pole_Pairs + compensation);
     }
 
     generate_svpwm_waveforms();
@@ -676,7 +687,12 @@ void FOC_Vel_Loop(float voltage) {
     float num;
     MT6701_ReadAngle(&num);
     // 1. 机械角度转电角度
-    SguanSVPWM.theta = normalize_angle((num + alignment_angle_offset)*Pole_Pairs + SensorDelay_Error);
+    float actual_speed_rad_s;
+    MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
+    // 基于速度的角度超前补偿
+    float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
+    SguanSVPWM.theta = normalize_angle(
+        (num + alignment_angle_offset) * Pole_Pairs + compensation);
     // 2. 设置电压（控制转矩）
     SguanSVPWM.u_q = voltage;
     SguanSVPWM.u_d = 0.0f;
@@ -778,3 +794,4 @@ void FOC_SetPIDParams(const char *loop, float kp, float ki, float kd, float limi
         SguanFOC.Position_Velocity_Current_Cascade.Position.Output_limit = limit;
     }
 }
+
