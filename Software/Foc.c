@@ -2,7 +2,7 @@
  * @Author: 星必尘Sguan
  * @Date: 2025-08-29 14:25:14
  * @LastEditors: 星必尘Sguan|3464647102@qq.com
- * @LastEditTime: 2025-09-29 15:25:23
+ * @LastEditTime: 2025-09-29 22:20:01
  * @FilePath: \demo_STM32F103FocCode\Software\Foc.c
  * @Description: FOC应用层代码开发
  * 
@@ -36,7 +36,7 @@ static uint32_t last_time = 0;          // 上次更新时间
 // 初始"电角度"和"机械角度"对齐变量
 static float alignment_angle_offset = 0.0f;
 // 角度位置传感器延迟误差补偿
-static float OPTIMAL_DELAY_TIME = 0.014f;
+static float OPTIMAL_DELAY_TIME = 0.017f;
 
 // q轴电压计算值（INA199a1中间变量）
 #define Sqrt3 1.732050807568877f        // 根号3的浮点值
@@ -296,6 +296,8 @@ void FOC_Position_SingleLoop(float target_angle_rad) {
  * @param {float} target_speed_rad_s 目标速度 (rad/s)
  */
 void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
+    float mech_angle_rad;
+    MT6701_ReadAngle(&mech_angle_rad);
     float actual_speed_rad_s;
     MT6701_FilteredAngularVelocity(&actual_speed_rad_s);
 
@@ -320,20 +322,17 @@ void FOC_Velocity_SingleLoop(float target_speed_rad_s) {
     float pid_output = (*Kp * error) + (*Ki * (*Integral)) + (*Kd * derivative);
 
     // --- 3. 限幅 ---
-    pid_output = constrain(pid_output, -limit, limit);
+    pid_output = constrain(pid_output,-limit, limit);
 
     // --- 4. 设置FOC电压 ---
     SguanSVPWM.u_q = pid_output;
     SguanSVPWM.u_d = 0.0f;
 
     // --- 5. 正确的角度补偿 ---
-    float mech_angle_rad;
-    if (MT6701_ReadAngle(&mech_angle_rad)) {
-        // 基于速度的角度超前补偿
-        float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
-        SguanSVPWM.theta = normalize_angle(
-            (mech_angle_rad + alignment_angle_offset) * Pole_Pairs + compensation);
-    }
+    // 基于速度的角度超前补偿
+    float compensation = actual_speed_rad_s * OPTIMAL_DELAY_TIME;
+    SguanSVPWM.theta = normalize_angle(
+        (mech_angle_rad + alignment_angle_offset) * Pole_Pairs + compensation);
 
     // --- 6. 输出SVPWM ---
     generate_svpwm_waveforms();
